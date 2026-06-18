@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Mic, FileText, CheckCircle, ArrowLeft, Printer, History, Trash2, Plus } from 'lucide-react';
+import { Mic, FileText, CheckCircle, ArrowLeft, Printer, History, Trash2, Plus, Package } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import jsPDF from 'jspdf';
@@ -19,9 +19,16 @@ export default function VoiceBilling() {
   const [isCredit, setIsCredit] = useState(false);
   const [customerName, setCustomerName] = useState('');
 
+  // Autocomplete customer names states
+  const [customerNamesList, setCustomerNamesList] = useState([]);
+  const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
+  const [filteredCustomerSuggestions, setFilteredCustomerSuggestions] = useState([]);
+  const customerAutocompleteRef = useRef(null);
+
   const mediaRecorderRef = useRef(null);
   const recognitionRef = useRef(null);
   const navigate = useNavigate();
+  const audioChunksRef = useRef([]);
 
   const fetchCurrentStock = async () => {
     try {
@@ -35,7 +42,7 @@ export default function VoiceBilling() {
       }
       if (!userId) return;
 
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('user_stock')
         .select(`id, current_stock, selling_price, low_stock_limit, master_inventory (item_name, category, unit)`)
         .eq('user_id', userId);
@@ -46,8 +53,33 @@ export default function VoiceBilling() {
     }
   };
 
+  const fetchCustomerNames = async () => {
+    try {
+      const userId = localStorage.getItem('demoUserId');
+      if (!userId) return;
+
+      const { data, error } = await supabase
+        .from('past_bills')
+        .select('customer_name')
+        .eq('user_id', userId)
+        .not('customer_name', 'is', null);
+
+      if (error) throw error;
+      if (data) {
+        // Find unique customer names
+        const names = [...new Set(data.map(b => b.customer_name?.trim()).filter(Boolean))];
+        setCustomerNamesList(names);
+      }
+    } catch (e) {
+      console.error('Error fetching customer names:', e);
+    }
+  };
+
   useEffect(() => {
-    fetchCurrentStock();
+    const timer = setTimeout(() => {
+      fetchCurrentStock();
+      fetchCustomerNames();
+    }, 0);
     
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognition) {
@@ -65,8 +97,42 @@ export default function VoiceBilling() {
       
       recognitionRef.current = recognition;
     }
+
+    return () => {
+      clearTimeout(timer);
+    };
   }, []);
-  const audioChunksRef = useRef([]);
+
+  // Listen to clicking outside customer suggestions dropdown
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (customerAutocompleteRef.current && !customerAutocompleteRef.current.contains(event.target)) {
+        setShowCustomerSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleCustomerNameChange = (e) => {
+    const val = e.target.value;
+    setCustomerName(val);
+    if (val.trim() === '') {
+      setFilteredCustomerSuggestions([]);
+      setShowCustomerSuggestions(false);
+    } else {
+      const matches = customerNamesList.filter(name => 
+        name.toLowerCase().includes(val.toLowerCase())
+      );
+      setFilteredCustomerSuggestions(matches);
+      setShowCustomerSuggestions(true);
+    }
+  };
+
+  const selectCustomer = (name) => {
+    setCustomerName(name);
+    setShowCustomerSuggestions(false);
+  };
 
   const startRecording = async () => {
     try {
@@ -259,6 +325,8 @@ export default function VoiceBilling() {
         is_credit: isCredit
       });
       
+      // Refresh names list for next runs
+      fetchCustomerNames();
       setViewState('success');
       fetchCurrentStock();
       
@@ -273,14 +341,12 @@ export default function VoiceBilling() {
     const input = document.getElementById('receipt-download-container');
     if (!input) return;
 
-    // Show it temporarily to capture
     input.style.display = 'block';
 
     try {
       const canvas = await html2canvas(input, { scale: 2 });
       const imgData = canvas.toDataURL('image/png');
       
-      // Calculate dynamic height for thermal printer style (80mm width)
       const pdf = new jsPDF({
         orientation: 'portrait',
         unit: 'mm',
@@ -296,7 +362,6 @@ export default function VoiceBilling() {
       console.error('Error generating PDF:', e);
       alert('Failed to generate PDF');
     } finally {
-      // Hide it again
       input.style.display = 'none';
     }
   };
@@ -318,10 +383,7 @@ export default function VoiceBilling() {
           <div style={{ backgroundColor: '#fff', padding: '1rem', borderBottom: '1px solid #e5e7eb' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <div style={{ width: '24px', height: '3px', backgroundColor: '#333', position: 'relative' }}>
-                  <div style={{ width: '24px', height: '3px', backgroundColor: '#333', position: 'absolute', top: '-6px' }} />
-                  <div style={{ width: '24px', height: '3px', backgroundColor: '#333', position: 'absolute', top: '6px' }} />
-                </div>
+                <Package size={22} color="var(--primary-blue)" />
                 <span style={{ fontWeight: 'bold', color: 'var(--primary-blue)' }}>दुकानदार सहायक</span>
               </div>
               <button onClick={() => navigate('/past-bills')} className="btn btn-outline" style={{ padding: '0.4rem 0.8rem', borderRadius: '20px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -340,30 +402,42 @@ export default function VoiceBilling() {
 
           <div style={{ padding: '1rem', paddingBottom: '160px' }}>
             
-            {/* Recording Controls */}
+            {/* Recording Controls & Waveform */}
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '1.5rem' }}>
                <div style={{ width: '100%', marginBottom: '1rem' }}>
-                 <div className={`mic-btn ${isRecording ? 'recording' : ''}`} style={{ margin: '0 auto', cursor: 'default', width: '60px', height: '60px' }}>
-                   <Mic size={24} />
+                 <div className={`mic-btn ${isRecording ? 'recording' : ''}`} style={{ margin: '0 auto', cursor: 'pointer', width: '70px', height: '70px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%' }} onClick={isRecording ? stopRecording : startRecording}>
+                   <Mic size={28} />
                  </div>
                </div>
+
+               {isRecording && (
+                 <div className="waveform-container">
+                   <div className="waveform-bar" />
+                   <div className="waveform-bar" />
+                   <div className="waveform-bar" />
+                   <div className="waveform-bar" />
+                   <div className="waveform-bar" />
+                   <div className="waveform-bar" />
+                   <div className="waveform-bar" />
+                   <div className="waveform-bar" />
+                 </div>
+               )}
                
-               <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem' }}>
+               <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
                  {!isRecording ? (
                    <button className="btn btn-primary" onClick={startRecording} style={{ borderRadius: '50px', padding: '0.75rem 2rem' }}>
-                     <Mic size={20} style={{ marginRight: '8px' }} /> माइक से जोड़ें (Voice Add)
+                     <Mic size={20} style={{ marginRight: '8px' }} /> माइक से बोलें (Voice Add)
                    </button>
                  ) : (
                    <button className="btn btn-primary" onClick={stopRecording} style={{ borderRadius: '50px', padding: '0.75rem 2rem', backgroundColor: 'var(--danger)', borderColor: 'var(--danger)' }}>
-                     <div style={{ width: '14px', height: '14px', backgroundColor: 'white', display: 'inline-block', marginRight: '8px', borderRadius: '2px' }} />
-                     रोकें (Stop)
+                     रोकें (Stop Recording)
                    </button>
                  )}
                </div>
 
                {(isRecording || realtimeText || (billDetails && billDetails.spoken_text)) && (
                  <div style={{ marginTop: '1rem', width: '100%', padding: '1rem', backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px' }}>
-                   <p style={{ fontSize: '1rem', color: '#14532d', margin: 0 }}>
+                   <p style={{ fontSize: '1rem', color: '#14532d', margin: 0, fontStyle: 'italic' }}>
                      {(billDetails && billDetails.spoken_text) ? billDetails.spoken_text : (realtimeText || "बोलना शुरू करें...")}
                    </p>
                  </div>
@@ -379,12 +453,12 @@ export default function VoiceBilling() {
 
             {/* Bill Preview List */}
             {billPreview && (
-              <div style={{ backgroundColor: 'white', borderRadius: '8px', boxShadow: 'var(--shadow-sm)', overflow: 'hidden' }}>
+              <div style={{ backgroundColor: 'white', borderRadius: '12px', boxShadow: 'var(--shadow-sm)', overflow: 'hidden', border: '1px solid #e5e7eb' }}>
                 <table className="mobile-list-table">
                   <thead>
                     <tr>
                       <th className="item-col">आइटम (ITEM)</th>
-                      <th>रेट (RATE)</th>
+                      <th>दर (RATE)</th>
                       <th>मात्रा (QTY)</th>
                       <th>कुल (TOTAL)</th>
                     </tr>
@@ -418,7 +492,7 @@ export default function VoiceBilling() {
                             <Stepper value={res.quantity_billed || 0} onChange={(val) => handlePreviewEdit(i, 'quantity_billed', val)} />
                           </div>
                         </td>
-                        <td style={{ fontWeight: 'bold', color: 'var(--primary-blue)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <td style={{ fontWeight: 'bold', color: 'var(--primary-blue)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: '8px' }}>
                           <span>₹{res.item_total || 0}</span>
                           <Trash2 size={16} color="var(--danger)" style={{ cursor: 'pointer', marginLeft: '6px' }} onClick={() => handleRemoveItem(i)} />
                         </td>
@@ -432,29 +506,54 @@ export default function VoiceBilling() {
                     <Plus size={18} /> आइटम जोड़ें (Add Item)
                   </button>
                 </div>
-                <div style={{ padding: '0.75rem 1rem', borderTop: '1px solid #e5e7eb', backgroundColor: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 'bold', color: 'var(--text-dark)' }}>छूट (Discount):</span>
-                  <div style={{ display: 'flex', alignItems: 'center' }}>
-                    <span style={{ marginRight: '4px', fontWeight: 'bold', color: 'var(--text-dark)' }}>₹</span>
-                    <input 
-                      type="number" 
-                      value={discountAmount || ''}
-                      onChange={(e) => setDiscountAmount(parseFloat(e.target.value) || 0)}
-                      placeholder="0"
-                      style={{ width: '80px', padding: '0.4rem', borderRadius: '4px', border: '1px solid #ccc', textAlign: 'right', fontWeight: 'bold' }}
-                    />
+
+                {/* Discount and Preset Chips */}
+                <div style={{ padding: '0.9rem 1rem', borderTop: '1px solid #e5e7eb', backgroundColor: '#fff', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontWeight: 'bold', color: 'var(--text-dark)' }}>छूट (Discount):</span>
+                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                      <span style={{ marginRight: '4px', fontWeight: 'bold', color: 'var(--text-dark)' }}>₹</span>
+                      <input 
+                        type="number" 
+                        value={discountAmount || ''}
+                        onChange={(e) => setDiscountAmount(parseFloat(e.target.value) || 0)}
+                        placeholder="0"
+                        style={{ width: '80px', padding: '0.4rem', borderRadius: '4px', border: '1px solid #ccc', textAlign: 'right', fontWeight: 'bold' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="preset-discounts">
+                    {[10, 20, 50, 100].map(amt => (
+                      <button 
+                        key={amt}
+                        type="button"
+                        className="preset-discount-btn"
+                        onClick={() => setDiscountAmount(amt)}
+                      >
+                        -₹{amt}
+                      </button>
+                    ))}
+                    <button 
+                      type="button" 
+                      className="preset-discount-btn" 
+                      style={{ color: 'var(--danger)' }}
+                      onClick={() => setDiscountAmount(0)}
+                    >
+                      Clear
+                    </button>
                   </div>
                 </div>
               </div>
             )}
           </div>
 
-          {/* Sticky Footer for Screen 1 */}
+          {/* Sticky Footer */}
           {billPreview && billPreview.length > 0 && (
             <div style={{ position: 'fixed', bottom: '70px', left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: '480px', backgroundColor: 'white', padding: '1rem', borderTop: '1px solid #e5e7eb', zIndex: 90, boxShadow: '0 -4px 6px -1px rgba(0,0,0,0.05)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', fontWeight: 'bold', fontSize: '0.9rem' }}>
                 <span>{billPreview.length} आइटम ({billPreview.length} ITEMS)</span>
-                <span>कुल (Total): ₹{calculateGrandTotal().toFixed(2)}</span>
+                <span>कुल: ₹{calculateGrandTotal().toFixed(2)}</span>
               </div>
               {(() => {
                 const hasErrors = billPreview.some(item => item.error);
@@ -473,7 +572,7 @@ export default function VoiceBilling() {
                     disabled={hasErrors}
                   >
                     <FileText size={20} style={{ marginRight: '8px' }} /> 
-                    {hasErrors ? "कृपया त्रुटियों को ठीक करें (Fix Errors First)" : "बिल देखें (Preview Bill)"}
+                    {hasErrors ? "कृपया त्रुटियों को ठीक करें (Fix Errors First)" : "बिल सेटल करें (Settle Bill)"}
                   </button>
                 );
               })()}
@@ -517,8 +616,8 @@ export default function VoiceBilling() {
               </div>
             </div>
 
-            <div style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '1rem', backgroundColor: '#f9fafb' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <div style={{ border: '1px solid #e5e7eb', borderRadius: '12px', padding: '1.2rem', backgroundColor: '#f9fafb' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.2rem' }}>
                 <span style={{ fontWeight: '600', color: 'var(--text-dark)' }}>उधार पर? (On Credit?)</span>
                 <label style={{ position: 'relative', display: 'inline-block', width: '40px', height: '20px' }}>
                   <input type="checkbox" checked={isCredit} onChange={e => setIsCredit(e.target.checked)} style={{ opacity: 0, width: 0, height: 0 }} />
@@ -528,16 +627,30 @@ export default function VoiceBilling() {
                 </label>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>ग्राहक चुनें (Choose Customer)</label>
+              {/* Searchable customer dropdown overlay */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', position: 'relative' }} ref={customerAutocompleteRef}>
+                <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>ग्राहक का नाम (Customer Name)</label>
                 <input 
                   type="text" 
                   className="input-field" 
-                  placeholder="🔍 खोजें (Search or Add)..." 
+                  placeholder="🔍 खोजें या नया नाम लिखें..." 
                   value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
+                  onChange={handleCustomerNameChange}
                   style={{ backgroundColor: 'white' }}
                 />
+                {showCustomerSuggestions && filteredCustomerSuggestions.length > 0 && (
+                  <div className="autocomplete-dropdown" style={{ top: '100%', marginTop: '4px' }}>
+                    {filteredCustomerSuggestions.map((name, index) => (
+                      <div 
+                        key={index} 
+                        className="autocomplete-item"
+                        onClick={() => selectCustomer(name)}
+                      >
+                        <span style={{ fontWeight: 600 }}>{name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
