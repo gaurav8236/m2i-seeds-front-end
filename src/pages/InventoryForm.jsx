@@ -15,6 +15,7 @@ export default function InventoryForm() {
   const [suggestions, setSuggestions] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [stockList, setStockList] = useState([]);
+  const [previewItems, setPreviewItems] = useState([]);
 
   const fetchCurrentStock = async () => {
     try {
@@ -114,74 +115,73 @@ export default function InventoryForm() {
     setAliases(aliases.filter((_, i) => i !== indexToRemove));
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleAddToPreview = () => {
+    if (!itemName.trim() || !price || !currentStock) {
+      alert("कृपया पूर्वावलोकन में जोड़ने से पहले आइटम का नाम, कीमत और स्टॉक भरें।");
+      return;
+    }
+    const newItem = {
+      item_name: itemName.trim(),
+      category,
+      unit,
+      cost_price: 0.0,
+      selling_price: parseFloat(price) || 0,
+      current_stock: parseFloat(currentStock) || 0,
+      low_stock_limit: parseFloat(lowStockLimit) || 0,
+      aliases: aliases,
+      image_url: null
+    };
+    setPreviewItems([...previewItems, newItem]);
+    
+    // Clear form for next item
+    setItemName('');
+    setPrice('');
+    setCurrentStock('');
+    setAliases([]); 
+  };
+
+  const handleRemoveFromPreview = (index) => {
+    setPreviewItems(previewItems.filter((_, i) => i !== index));
+  };
+
+  const handleSubmitAll = async () => {
+    if (previewItems.length === 0) {
+      alert("कृपया सबमिट करने से पहले पूर्वावलोकन में कम से कम एक आइटम जोड़ें।");
+      return;
+    }
     try {
       let userId = localStorage.getItem('demoUserId');
       
       if (!userId) {
-        console.log("No authenticated user, fetching a test user for demo...");
         const { data: users } = await supabase.from('users').select('id').limit(1);
-        
         if (users && users.length > 0) {
           userId = users[0].id;
         } else {
-          userId = window.prompt(
-            "Demo Mode: No logged-in user found.\n" +
-            "Please paste a valid User UUID from your Supabase 'users' table to test this form:"
-          );
+          userId = window.prompt("Demo Mode: No logged-in user found.\nPlease paste a valid User UUID:");
         }
-        
-        if (userId) {
-          localStorage.setItem('demoUserId', userId);
-        }
+        if (userId) localStorage.setItem('demoUserId', userId);
       }
 
       if (!userId) {
-        alert("A valid user ID is required to save stock.");
+        alert("स्टॉक सहेजने के लिए एक वैध उपयोगकर्ता आईडी आवश्यक है।");
         return;
       }
 
-      // HACK: To guarantee we don't overwrite, we will fetch the exact current stock 
-      // directly from the database right before updating, bypassing any stale UI state.
-      let existingDbStock = 0;
-      try {
-        const { data: checkData } = await supabase
-          .from('user_stock')
-          .select('current_stock, master_inventory!inner(item_name)')
-          .eq('user_id', userId)
-          .ilike('master_inventory.item_name', itemName.trim());
-          
-        if (checkData && checkData.length > 0) {
-          existingDbStock = parseFloat(checkData[0].current_stock) || 0;
-        }
-      } catch (e) { 
-        console.error("Error checking existing stock:", e); 
-      }
-
-      const stockToAdd = parseFloat(currentStock) || 0;
-      const finalStock = existingDbStock + stockToAdd;
-
+      // Submit the entire JSON array to our new bulk function
+      // NOTE: Parameter is p_items which perfectly matches what Flutter will use!
       const { data, error } = await supabase.rpc('upsert_inventory_item', {
         p_user_id: userId,
-        p_item_name: itemName.trim(),
-        p_category: category,
-        p_unit: unit,
-        p_cost_price: 0.0,
-        p_selling_price: parseFloat(price) || 0,
-        p_current_stock: finalStock,
-        p_low_stock_limit: lowStockLimit,
-        p_aliases: aliases,
-        p_image_url: null,
+        p_items: previewItems
       });
 
       if (error) throw error;
 
-      alert("Item Successfully Added to Stock!");
-      fetchCurrentStock();
+      alert("सभी आइटम सफलतापूर्वक स्टॉक में जोड़ दिए गए!");
+      setPreviewItems([]); // Clear preview
+      fetchCurrentStock(); // Refresh main table
     } catch (error) {
       console.error(error);
-      alert(`Error saving item: ${error.message || JSON.stringify(error)}`);
+      alert(`आइटम सहेजने में त्रुटि: ${error.message || JSON.stringify(error)}`);
     }
   };
 
@@ -189,7 +189,7 @@ export default function InventoryForm() {
     <div>
       <h1>सामान जोड़े</h1>
       
-      <form onSubmit={handleSubmit}>
+      <form onSubmit={(e) => { e.preventDefault(); handleAddToPreview(); }}>
         <div className="form-group" style={{ position: 'relative' }}>
           <label>आइटम का नाम</label>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -300,14 +300,51 @@ export default function InventoryForm() {
         </div>
 
         <div className="grid-2" style={{ marginTop: '2rem' }}>
-          <button type="button" className="btn btn-outline">हटाएं</button>
-          <button type="button" className="btn btn-primary" onClick={() => {}}>नया सामान</button>
+          <button type="button" className="btn btn-outline" onClick={() => {
+            setItemName(''); setPrice(''); setCurrentStock(''); setAliases([]);
+          }}>हटाएं (Clear Form)</button>
+          <button type="button" className="btn btn-primary" onClick={handleAddToPreview}>
+            <Plus size={18} style={{ marginRight: '8px' }} />
+            नया सामान (Add to Preview)
+          </button>
         </div>
-        
-        <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '1rem' }}>
-          समीक्षा करे
-        </button>
       </form>
+
+      {/* PREVIEW TABLE */}
+      {previewItems.length > 0 && (
+        <div style={{ marginTop: '2rem', padding: '1rem', border: '2px dashed var(--primary-blue)', borderRadius: '12px' }}>
+          <h3 style={{ marginTop: 0, color: 'var(--primary-blue)' }}>समीक्षा (Preview)</h3>
+          <table className="stock-table" style={{ marginBottom: '1rem' }}>
+            <thead>
+              <tr>
+                <th>आइटम</th>
+                <th>श्रेणी</th>
+                <th>कीमत</th>
+                <th>स्टॉक</th>
+                <th>स्थिति</th>
+              </tr>
+            </thead>
+            <tbody>
+              {previewItems.map((item, idx) => (
+                <tr key={idx} style={{ backgroundColor: '#f0f9ff' }}>
+                  <td style={{ fontWeight: 600 }}>{item.item_name}</td>
+                  <td>{item.category}</td>
+                  <td>₹{item.selling_price}</td>
+                  <td>{item.current_stock} {item.unit}</td>
+                  <td>
+                    <button type="button" onClick={() => handleRemoveFromPreview(idx)} style={{ color: 'red', border: 'none', background: 'none', cursor: 'pointer' }}>
+                      <Trash2 size={18} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <button type="button" onClick={handleSubmitAll} className="btn btn-primary" style={{ width: '100%', backgroundColor: 'var(--success)' }}>
+            समीक्षा करे (Submit {previewItems.length} Items to Database)
+          </button>
+        </div>
+      )}
 
       {stockList.length > 0 && (
         <div className="stock-table-container">

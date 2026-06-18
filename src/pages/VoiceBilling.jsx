@@ -1,53 +1,43 @@
 import { useState, useRef, useEffect } from 'react';
-import { Mic, FileText, CheckCircle } from 'lucide-react';
+import { Mic, FileText, CheckCircle, ArrowLeft, Printer, History } from 'lucide-react';
 import { supabase } from '../supabaseClient';
+import { useNavigate } from 'react-router-dom';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 
 export default function VoiceBilling() {
+  const [viewState, setViewState] = useState('input'); // input, settlement, success
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [billGenerated, setBillGenerated] = useState(false);
   const [billDetails, setBillDetails] = useState(null);
+  const [billPreview, setBillPreview] = useState(null);
+  const [realtimeText, setRealtimeText] = useState("");
   const [stockList, setStockList] = useState([]);
+  
+  // Settlement fields
+  const [isCredit, setIsCredit] = useState(false);
+  const [customerName, setCustomerName] = useState('');
+
   const mediaRecorderRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const navigate = useNavigate();
 
   const fetchCurrentStock = async () => {
     try {
-      // HACK: Use localStorage to persist the demo user ID across the app
       let userId = localStorage.getItem('demoUserId');
       if (!userId) {
-        // Fallback: fetch the first user from the DB
         const { data: users } = await supabase.from('users').select('id').limit(1);
         if (users && users.length > 0) {
           userId = users[0].id;
           localStorage.setItem('demoUserId', userId);
         }
       }
+      if (!userId) return;
 
-      if (!userId) {
-        console.warn("No user ID found to fetch stock. Table will remain empty until you add an item.");
-        return;
-      }
-
-      console.log("Fetching stock for user:", userId);
       const { data, error } = await supabase
         .from('user_stock')
-        .select(`
-          id,
-          current_stock,
-          selling_price,
-          low_stock_limit,
-          master_inventory (
-            item_name,
-            category,
-            unit
-          )
-        `)
+        .select(`id, current_stock, selling_price, low_stock_limit, master_inventory (item_name, category, unit)`)
         .eq('user_id', userId);
-
-      if (error) {
-        console.error("Supabase Select Error:", error);
-        return;
-      }
 
       if (data) setStockList(data);
     } catch (e) {
@@ -57,6 +47,23 @@ export default function VoiceBilling() {
 
   useEffect(() => {
     fetchCurrentStock();
+    
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      
+      recognition.onresult = (event) => {
+        let currentTranscript = "";
+        for (let i = 0; i < event.results.length; i++) {
+          currentTranscript += event.results[i][0].transcript;
+        }
+        setRealtimeText(currentTranscript);
+      };
+      
+      recognitionRef.current = recognition;
+    }
   }, []);
   const audioChunksRef = useRef([]);
 
@@ -74,8 +81,14 @@ export default function VoiceBilling() {
 
       mediaRecorderRef.current.onstop = handleAudioStop;
       mediaRecorderRef.current.start();
+      
+      setRealtimeText("");
+      if (recognitionRef.current) recognitionRef.current.start();
+
       setIsRecording(true);
-      setBillGenerated(false);
+      setViewState('input');
+      setBillPreview(null);
+      setBillDetails(null);
     } catch (err) {
       console.error("Error accessing microphone", err);
       alert("Microphone access is required to use this feature.");
@@ -87,6 +100,7 @@ export default function VoiceBilling() {
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
       setIsRecording(false);
+      if (recognitionRef.current) recognitionRef.current.stop();
     }
   };
 
@@ -95,46 +109,30 @@ export default function VoiceBilling() {
     setIsProcessing(true);
 
     try {
-      // Create FormData to send to the FastAPI backend
       const formData = new FormData();
-      // The FastAPI backend specifically expects a parameter named "file" (not "audio")
       formData.append('file', audioBlob, 'recording.webm');
       
-      // Also send the user_id so the backend knows whose stock to deduct
       const demoUserId = localStorage.getItem('demoUserId');
       if (demoUserId) {
         formData.append('user_id', demoUserId);
       } else {
-        throw new Error("No user ID found. Please add an item to stock first to set your user ID.");
+        throw new Error("No user ID found.");
       }
 
+      formData.append('preview_only', 'true');
+
       const RAILWAY_API_URL = 'https://web-production-55116.up.railway.app/voice-search/';
-      console.log(`Sending audio and user_id to: ${RAILWAY_API_URL}...`);
       
       const response = await fetch(RAILWAY_API_URL, {
         method: 'POST',
         body: formData,
       });
 
-      if (!response.ok) {
-        let errorMsg = response.statusText;
-        try {
-          const errData = await response.json();
-          errorMsg = JSON.stringify(errData);
-        } catch (e) {}
-        throw new Error(`Server returned ${response.status}: ${errorMsg}`);
-      }
+      if (!response.ok) throw new Error(`Server returned ${response.status}`);
 
       const data = await response.json();
-      console.log('Success! API Response:', data);
-
-      setBillDetails(data);
-      setBillGenerated(true);
-      
-      // Wait a moment for DB replication if any, then fetch fresh stock
-      setTimeout(() => {
-        fetchCurrentStock();
-      }, 500);
+      setBillPreview(data.results || []);
+      setBillDetails({ spoken_text: data.spoken_text }); 
 
     } catch (error) {
       console.error('Error uploading audio:', error);
@@ -144,129 +142,396 @@ export default function VoiceBilling() {
     }
   };
 
+  const handlePreviewEdit = (index, field, value) => {
+    const updatedPreview = [...billPreview];
+    updatedPreview[index][field] = value;
+    
+    if (field === 'quantity_billed' || field === 'price_per_unit') {
+      const qty = parseFloat(updatedPreview[index].quantity_billed) || 0;
+      const price = parseFloat(updatedPreview[index].price_per_unit) || 0;
+      updatedPreview[index].item_total = qty * price;
+      
+      const currentStock = updatedPreview[index].current_stock || 0;
+      updatedPreview[index].stock_remaining = currentStock - qty;
+    }
+    
+    setBillPreview(updatedPreview);
+  };
+
+  const calculateGrandTotal = () => {
+    if (!billPreview) return 0;
+    return billPreview.reduce((sum, item) => sum + (item.item_total || 0), 0);
+  };
+
+  const handleFinalizeBill = async () => {
+    try {
+      setIsProcessing(true);
+      
+      const validItems = billPreview.filter(item => item.item_name && item.item_name.trim() !== '');
+      
+      const sanitizedItems = validItems.map(item => ({
+        stock_id: item.stock_id || null,
+        new_stock: item.stock_remaining !== undefined ? Math.max(0, item.stock_remaining) : null,
+        item_name: item.item_name || 'Unknown Item',
+        quantity_billed: parseFloat(item.quantity_billed) || 0,
+        price_per_unit: parseFloat(item.price_per_unit) || 0,
+        item_total: parseFloat(item.item_total) || 0,
+        error: !!item.error
+      }));
+
+      const finalTotal = validItems.reduce((sum, item) => sum + (item.item_total || 0), 0);
+      const RAILWAY_CHECKOUT_URL = 'https://web-production-55116.up.railway.app/voice-checkout/';
+
+      const payload = {
+        user_id: localStorage.getItem('demoUserId'),
+        total_bill_amount: finalTotal,
+        customer_name: customerName || null,
+        is_credit: isCredit,
+        items: sanitizedItems
+      };
+
+      const response = await fetch(RAILWAY_CHECKOUT_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Server returned ${response.status}: ${errText}`);
+      }
+
+      setBillDetails({
+        ...billDetails,
+        results: sanitizedItems,
+        total_bill_amount: finalTotal,
+        customer_name: customerName,
+        is_credit: isCredit
+      });
+      
+      setViewState('success');
+      fetchCurrentStock();
+      
+    } catch (e) {
+      alert("Error confirming bill: " + e.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleDownloadPDF = async () => {
+    const input = document.getElementById('receipt-download-container');
+    if (!input) return;
+
+    // Show it temporarily to capture
+    input.style.display = 'block';
+
+    try {
+      const canvas = await html2canvas(input, { scale: 2 });
+      const imgData = canvas.toDataURL('image/png');
+      
+      // Calculate dynamic height for thermal printer style (80mm width)
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: [80, Math.max(100, (canvas.height * 80) / canvas.width)]
+      });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save(`Bill_${new Date().getTime()}.pdf`);
+    } catch (e) {
+      console.error('Error generating PDF:', e);
+      alert('Failed to generate PDF');
+    } finally {
+      // Hide it again
+      input.style.display = 'none';
+    }
+  };
+
+  const Stepper = ({ value, onChange }) => (
+    <div className="stepper-container">
+      <button className="stepper-btn" onClick={() => onChange(Math.max(0, parseFloat(value) - 1))}>-</button>
+      <input className="stepper-input" type="number" value={value} onChange={e => onChange(parseFloat(e.target.value) || 0)} />
+      <button className="stepper-btn" onClick={() => onChange(parseFloat(value) + 1)}>+</button>
+    </div>
+  );
+
   return (
-    <div style={{ textAlign: 'center' }}>
-      <h1>Voice Billing System</h1>
-      <p style={{ color: 'var(--text-muted)' }}>
-        Tap the microphone and speak the items you want to bill. Our AI will automatically transcribe and deduct them from your inventory.
-      </p>
+    <div style={{ position: 'relative', minHeight: '100vh', backgroundColor: '#f0f4f8' }}>
+      
+      {/* ---------------- VIEW STATE 1: NEW BILL (Input & Preview) ---------------- */}
+      {viewState === 'input' && (
+        <>
+          <div style={{ backgroundColor: '#fff', padding: '1rem', borderBottom: '1px solid #e5e7eb' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div style={{ width: '24px', height: '3px', backgroundColor: '#333', position: 'relative' }}>
+                  <div style={{ width: '24px', height: '3px', backgroundColor: '#333', position: 'absolute', top: '-6px' }} />
+                  <div style={{ width: '24px', height: '3px', backgroundColor: '#333', position: 'absolute', top: '6px' }} />
+                </div>
+                <span style={{ fontWeight: 'bold', color: 'var(--primary-blue)' }}>दुकानदार सहायक</span>
+              </div>
+              <button onClick={() => navigate('/past-bills')} className="btn btn-outline" style={{ padding: '0.4rem 0.8rem', borderRadius: '20px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <History size={16} /> इतिहास (History)
+              </button>
+            </div>
+            
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#e6f4ea', padding: '0.75rem 1rem', borderRadius: '8px' }}>
+              <span style={{ fontWeight: '600', color: '#1e8e3e' }}>कुल राशि (Total):</span>
+              <span style={{ fontWeight: 'bold', fontSize: '1.2rem', color: '#1e8e3e' }}>₹{calculateGrandTotal().toFixed(2)}</span>
+            </div>
+          </div>
 
-      <div className="mic-btn-wrapper">
-        <button 
-          className={`mic-btn ${isRecording ? 'recording' : ''}`}
-          onMouseDown={startRecording}
-          onMouseUp={stopRecording}
-          onTouchStart={startRecording}
-          onTouchEnd={stopRecording}
-          title="Hold to speak"
-        >
-          <Mic size={40} />
-        </button>
-        
-        <p style={{ marginTop: '1.5rem', fontWeight: 600, color: isRecording ? 'var(--danger)' : 'var(--text-dark)' }}>
-          {isRecording ? 'Recording... Release to process' : 'Hold to record'}
-        </p>
-      </div>
+          <div style={{ padding: '1rem', paddingBottom: '160px' }}>
+            
+            {/* Recording Controls */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '1.5rem' }}>
+               <div style={{ width: '100%', marginBottom: '1rem' }}>
+                 <div className={`mic-btn ${isRecording ? 'recording' : ''}`} style={{ margin: '0 auto', cursor: 'default', width: '60px', height: '60px' }}>
+                   <Mic size={24} />
+                 </div>
+               </div>
+               
+               <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem' }}>
+                 {!isRecording ? (
+                   <button className="btn btn-primary" onClick={startRecording} style={{ borderRadius: '50px', padding: '0.75rem 2rem' }}>
+                     <Mic size={20} style={{ marginRight: '8px' }} /> माइक से जोड़ें (Voice Add)
+                   </button>
+                 ) : (
+                   <button className="btn btn-primary" onClick={stopRecording} style={{ borderRadius: '50px', padding: '0.75rem 2rem', backgroundColor: 'var(--danger)', borderColor: 'var(--danger)' }}>
+                     <div style={{ width: '14px', height: '14px', backgroundColor: 'white', display: 'inline-block', marginRight: '8px', borderRadius: '2px' }} />
+                     रोकें (Stop)
+                   </button>
+                 )}
+               </div>
 
-      {isProcessing && (
-        <div style={{ marginTop: '2rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem', alignItems: 'center' }}>
-            <span className="loader" style={{ fontSize: '1.5rem' }}>⏳</span>
-            <p>Processing AI Transcription...</p>
+               {(isRecording || realtimeText) && !billPreview && (
+                 <div style={{ marginTop: '1rem', width: '100%', padding: '1rem', backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px' }}>
+                   <p style={{ fontSize: '1rem', color: '#14532d', margin: 0 }}>{realtimeText || "बोलना शुरू करें..."}</p>
+                 </div>
+               )}
+
+               {isProcessing && (
+                  <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span className="loader" style={{ fontSize: '1rem' }}>⏳</span>
+                    <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>आइटम प्रोसेस हो रहे हैं...</span>
+                  </div>
+               )}
+            </div>
+
+            {/* Bill Preview List */}
+            {billPreview && (
+              <div style={{ backgroundColor: 'white', borderRadius: '8px', boxShadow: 'var(--shadow-sm)', overflow: 'hidden' }}>
+                <table className="mobile-list-table">
+                  <thead>
+                    <tr>
+                      <th className="item-col">आइटम (ITEM)</th>
+                      <th>रेट (RATE)</th>
+                      <th>मात्रा (QTY)</th>
+                      <th>कुल (TOTAL)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {billPreview.map((res, i) => (
+                      <tr key={i} style={{ backgroundColor: res.error ? '#fee2e2' : 'transparent' }}>
+                        <td className="item-col">
+                          <input 
+                            type="text" 
+                            value={res.item_name || ''} 
+                            onChange={(e) => handlePreviewEdit(i, 'item_name', e.target.value)}
+                            style={{ width: '100%', minWidth: '90px', border: 'none', backgroundColor: 'transparent', fontWeight: 'bold', color: 'var(--text-dark)', fontSize: '0.9rem' }}
+                            placeholder="आइटम का नाम"
+                          />
+                          {res.error && <div style={{ color: 'red', fontSize: '0.7rem', marginTop: '2px' }}>{res.error === true ? 'नहीं मिला (Not Found)' : res.error}</div>}
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', justifyContent: 'center' }}>
+                            <Stepper value={res.price_per_unit || 0} onChange={(val) => handlePreviewEdit(i, 'price_per_unit', val)} />
+                          </div>
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', justifyContent: 'center' }}>
+                            <Stepper value={res.quantity_billed || 0} onChange={(val) => handlePreviewEdit(i, 'quantity_billed', val)} />
+                          </div>
+                        </td>
+                        <td style={{ fontWeight: 'bold', color: 'var(--primary-blue)' }}>
+                          ₹{res.item_total || 0}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Sticky Footer for Screen 1 */}
+          {billPreview && billPreview.length > 0 && (
+            <div style={{ position: 'fixed', bottom: '70px', left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: '480px', backgroundColor: 'white', padding: '1rem', borderTop: '1px solid #e5e7eb', zIndex: 90, boxShadow: '0 -4px 6px -1px rgba(0,0,0,0.05)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', fontWeight: 'bold', fontSize: '0.9rem' }}>
+                <span>{billPreview.length} आइटम ({billPreview.length} ITEMS)</span>
+                <span>कुल (Total): ₹{calculateGrandTotal().toFixed(2)}</span>
+              </div>
+              <button 
+                className="btn btn-primary" 
+                style={{ width: '100%', padding: '1rem', fontSize: '1.1rem', borderRadius: '8px' }}
+                onClick={() => setViewState('settlement')}
+              >
+                <FileText size={20} style={{ marginRight: '8px' }} /> बिल देखें (Preview Bill)
+              </button>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ---------------- VIEW STATE 2: SETTLEMENT ---------------- */}
+      {viewState === 'settlement' && (
+        <div style={{ backgroundColor: '#fff', minHeight: '100vh' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', borderBottom: '1px solid #e5e7eb' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <ArrowLeft size={24} color="var(--primary-blue)" onClick={() => setViewState('input')} style={{ cursor: 'pointer' }} />
+              <span style={{ fontWeight: 'bold', color: 'var(--primary-blue)', fontSize: '1.2rem' }}>बिल सेटलमेंट (Settlement)</span>
+            </div>
+            <Printer size={24} color="var(--text-dark)" />
+          </div>
+
+          <div style={{ padding: '1rem', paddingBottom: '100px' }}>
+            <div style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '1rem', marginBottom: '1.5rem' }}>
+              <h3 style={{ fontSize: '0.9rem', color: 'var(--primary-blue)', marginBottom: '1rem', marginTop: 0 }}>बिल विवरण (BILL DETAILS)</h3>
+              
+              {billPreview.map((item, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                  <span>{item.item_name} x {item.quantity_billed}</span>
+                  <span style={{ fontWeight: '600' }}>₹{item.item_total}</span>
+                </div>
+              ))}
+              
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #e5e7eb', fontWeight: 'bold', fontSize: '1.1rem', color: 'var(--primary-blue)' }}>
+                <span>कुल राशि (Grand Total)</span>
+                <span>₹{calculateGrandTotal().toFixed(2)}</span>
+              </div>
+            </div>
+
+            <div style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '1rem', backgroundColor: '#f9fafb' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <span style={{ fontWeight: '600', color: 'var(--text-dark)' }}>उधार पर? (On Credit?)</span>
+                <label style={{ position: 'relative', display: 'inline-block', width: '40px', height: '20px' }}>
+                  <input type="checkbox" checked={isCredit} onChange={e => setIsCredit(e.target.checked)} style={{ opacity: 0, width: 0, height: 0 }} />
+                  <span style={{ position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: isCredit ? 'var(--primary-blue)' : '#ccc', borderRadius: '20px', transition: '.4s' }}>
+                    <span style={{ position: 'absolute', height: '16px', width: '16px', left: isCredit ? '22px' : '2px', bottom: '2px', backgroundColor: 'white', borderRadius: '50%', transition: '.4s' }} />
+                  </span>
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>ग्राहक चुनें (Choose Customer)</label>
+                <input 
+                  type="text" 
+                  className="input-field" 
+                  placeholder="🔍 खोजें (Search or Add)..." 
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  style={{ backgroundColor: 'white' }}
+                />
+              </div>
+            </div>
+
+            <div style={{ marginTop: '2rem' }}>
+              <button 
+                className="btn btn-primary" 
+                style={{ width: '100%', padding: '1rem', fontSize: '1.1rem', borderRadius: '8px', backgroundColor: 'var(--success)', border: 'none' }}
+                onClick={handleFinalizeBill}
+                disabled={isProcessing}
+              >
+                {isProcessing ? 'प्रोसेस हो रहा है...' : <><CheckCircle size={20} style={{ marginRight: '8px' }} /> बिल पक्का करें (Finalize Bill)</>}
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {billGenerated && billDetails && (
-        <div className="printable-bill" style={{ 
-          marginTop: '2rem', 
-          padding: '2rem', 
-          backgroundColor: 'white', 
-          border: '1px solid #e5e7eb',
-          borderRadius: '12px',
-          boxShadow: 'var(--shadow-md)',
-          textAlign: 'left'
-        }}>
-          <div className="bill-success-header" style={{ textAlign: 'center', marginBottom: '2rem' }}>
-            <CheckCircle size={48} color="var(--success)" style={{ marginBottom: '1rem' }} />
-            <h2 style={{ margin: 0 }}>Bill Generated</h2>
-            <p style={{ color: 'var(--text-muted)' }}>Inventory has been successfully verified.</p>
+      {/* ---------------- VIEW STATE 3: SUCCESS ---------------- */}
+      {viewState === 'success' && billDetails && (
+        <div style={{ padding: '2rem 1rem', backgroundColor: '#fff', minHeight: '100vh', textAlign: 'center' }}>
+          <CheckCircle size={60} color="var(--success)" style={{ marginBottom: '1rem', margin: '0 auto' }} />
+          <h2 style={{ color: 'var(--success)', marginBottom: '0.5rem' }}>बिल पक्का हो गया</h2>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '2rem' }}>Bill Finalized Successfully</p>
+
+          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', marginBottom: '2rem' }}>
+            <button 
+              className="btn btn-outline" 
+              onClick={handleDownloadPDF}
+              style={{ flex: 1, borderColor: 'var(--danger)', color: 'var(--danger)', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyItems: 'center', justifyContent: 'center', gap: '8px' }}>
+              <FileText size={20} /> डाउनलोड PDF
+            </button>
           </div>
 
-          <div style={{ marginBottom: '1.5rem', padding: '1rem', backgroundColor: '#f9fafb', borderRadius: '8px' }}>
-            <p style={{ margin: 0, fontSize: '0.9rem', color: 'gray' }}><strong>Voice Recognized:</strong> "{billDetails.spoken_text}"</p>
+          <button 
+            className="btn btn-primary" 
+            style={{ width: '100%', padding: '1rem', borderRadius: '8px', backgroundColor: '#f3f4f6', color: 'var(--primary-blue)', border: 'none' }}
+            onClick={() => {
+              setViewState('input');
+              setBillPreview(null);
+              setBillDetails(null);
+              setCustomerName('');
+              setIsCredit(false);
+            }}
+          >
+            नया बिल शुरू करें (Start New Bill)
+          </button>
+        </div>
+      )}
+
+      {/* Hidden Receipt Template for PDF Generation */}
+      {billDetails && viewState === 'success' && (
+        <div id="receipt-download-container" style={{ display: 'none', width: '300px', padding: '20px', backgroundColor: 'white', color: 'black', fontFamily: 'sans-serif' }}>
+          <div style={{ textAlign: 'center', borderBottom: '2px dashed #ccc', paddingBottom: '10px', marginBottom: '10px' }}>
+            <h2 style={{ margin: '0 0 5px 0' }}>दुकानदार सहायक</h2>
+            <p style={{ margin: 0, fontSize: '12px', color: '#555' }}>Shopkeeper Assistant</p>
+          </div>
+          
+          <div style={{ fontSize: '12px', marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <div><strong>दिनांक (Date):</strong> {new Date().toLocaleDateString('en-IN')}</div>
+            {billDetails.customer_name && <div><strong>ग्राहक (Customer):</strong> {billDetails.customer_name}</div>}
+            {billDetails.is_credit && <div style={{ color: '#b91c1c', fontWeight: 'bold' }}>उधार बिल (CREDIT BILL)</div>}
           </div>
 
-          <table className="stock-table" style={{ marginBottom: '1.5rem' }}>
+          <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse', marginBottom: '10px' }}>
             <thead>
-              <tr>
-                <th>आइटम (Item)</th>
-                <th>मात्रा (Qty)</th>
-                <th>कुल मूल्य (Total)</th>
-                <th>बचा हुआ स्टॉक</th>
+              <tr style={{ borderBottom: '1px solid #ccc' }}>
+                <th style={{ textAlign: 'left', padding: '6px 0' }}>आइटम (Item)</th>
+                <th style={{ textAlign: 'center', padding: '6px 0' }}>मात्रा (Qty)</th>
+                <th style={{ textAlign: 'right', padding: '6px 0' }}>कुल (Total)</th>
               </tr>
             </thead>
             <tbody>
-              {billDetails.results?.map((res, i) => (
-                <tr key={i} style={{ backgroundColor: res.error ? '#fee2e2' : 'transparent' }}>
-                  <td style={{ fontWeight: 600 }}>
-                    {res.item_name}
-                    {res.error && <div style={{ color: 'red', fontSize: '0.8rem', marginTop: '4px' }}>{res.error}</div>}
-                  </td>
-                  <td>{res.quantity_billed}</td>
-                  <td>{res.error ? '-' : `₹${res.item_total}`}</td>
-                  <td style={{ fontWeight: 'bold', color: res.error ? 'red' : 'var(--primary-blue)' }}>
-                    {res.error ? 'Failed' : res.stock_remaining}
-                  </td>
+              {billDetails.results.map((item, idx) => (
+                <tr key={idx} style={{ borderBottom: '1px dotted #eee' }}>
+                  <td style={{ padding: '6px 0' }}>{item.item_name}</td>
+                  <td style={{ padding: '6px 0', textAlign: 'center' }}>{item.quantity_billed}</td>
+                  <td style={{ padding: '6px 0', textAlign: 'right', fontWeight: 'bold' }}>₹{item.item_total}</td>
                 </tr>
               ))}
             </tbody>
           </table>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '2px solid #e5e7eb', paddingTop: '1.5rem' }}>
-            <h3 style={{ margin: 0 }}>Total Amount: ₹{billDetails.total_bill_amount || 0}</h3>
-            <button className="btn btn-primary" onClick={() => window.print()}>
-              <FileText size={20} style={{ marginRight: '0.5rem' }} />
-              Download PDF Bill
-            </button>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '14px', borderTop: '2px dashed #ccc', paddingTop: '10px' }}>
+            <span>कुल राशि (Grand Total)</span>
+            <span>₹{billDetails.total_bill_amount.toFixed(2)}</span>
+          </div>
+          
+          <div style={{ textAlign: 'center', marginTop: '20px', fontSize: '10px', color: '#777' }}>
+            धन्यवाद! फिर पधारें।<br />
+            (Thank you for shopping)
           </div>
         </div>
       )}
 
-      {stockList.length > 0 && (
-        <div className="stock-table-container" style={{ marginTop: '3rem' }}>
-          <h2 style={{ textAlign: 'left', marginBottom: '1rem', fontSize: '1.25rem', paddingLeft: '1rem' }}>Current Stock</h2>
-          <table className="stock-table">
-            <thead>
-              <tr>
-                <th>आइटम</th>
-                <th>श्रेणी</th>
-                <th>कीमत</th>
-                <th>स्टॉक</th>
-                <th>स्थिति</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stockList.map(stock => {
-                const isLow = stock.current_stock <= stock.low_stock_limit;
-                return (
-                  <tr key={stock.id}>
-                    <td style={{ fontWeight: 600 }}>{stock.master_inventory?.item_name}</td>
-                    <td>{stock.master_inventory?.category}</td>
-                    <td>₹{stock.selling_price}</td>
-                    <td>{stock.current_stock} {stock.master_inventory?.unit}</td>
-                    <td>
-                      <span className={`status-badge ${isLow ? 'status-low' : 'status-ok'}`}>
-                        {isLow ? 'Low Stock' : 'In Stock'}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   );
 }
