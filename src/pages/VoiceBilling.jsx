@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Mic, FileText, CheckCircle, ArrowLeft, Printer, History } from 'lucide-react';
+import { Mic, FileText, CheckCircle, ArrowLeft, Printer, History, Trash2, Plus } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import jsPDF from 'jspdf';
@@ -13,6 +13,7 @@ export default function VoiceBilling() {
   const [billPreview, setBillPreview] = useState(null);
   const [realtimeText, setRealtimeText] = useState("");
   const [stockList, setStockList] = useState([]);
+  const [discountAmount, setDiscountAmount] = useState(0);
   
   // Settlement fields
   const [isCredit, setIsCredit] = useState(false);
@@ -158,9 +159,52 @@ export default function VoiceBilling() {
     setBillPreview(updatedPreview);
   };
 
-  const calculateGrandTotal = () => {
+  const handleItemSelect = (index, selectedItemName) => {
+    const updated = [...billPreview];
+    updated[index].item_name = selectedItemName;
+    
+    const stockItem = stockList.find(s => s.master_inventory?.item_name === selectedItemName);
+    if (stockItem) {
+      updated[index].price_per_unit = parseFloat(stockItem.selling_price) || 0;
+      updated[index].stock_id = stockItem.id;
+      updated[index].current_stock = stockItem.current_stock;
+      updated[index].error = false;
+      
+      const qty = parseFloat(updated[index].quantity_billed) || 0;
+      updated[index].item_total = qty * updated[index].price_per_unit;
+      updated[index].stock_remaining = updated[index].current_stock - qty;
+    }
+    
+    setBillPreview(updated);
+  };
+
+  const handleRemoveItem = (index) => {
+    const updated = [...billPreview];
+    updated.splice(index, 1);
+    setBillPreview(updated);
+  };
+
+  const handleAddBlankItem = () => {
+    const newItems = billPreview ? [...billPreview] : [];
+    newItems.push({
+      item_name: '',
+      quantity_billed: 1,
+      price_per_unit: 0,
+      item_total: 0,
+      stock_remaining: 0,
+      stock_id: null,
+      current_stock: 0
+    });
+    setBillPreview(newItems);
+  };
+
+  const calculateSubTotal = () => {
     if (!billPreview) return 0;
     return billPreview.reduce((sum, item) => sum + (item.item_total || 0), 0);
+  };
+
+  const calculateGrandTotal = () => {
+    return Math.max(0, calculateSubTotal() - discountAmount);
   };
 
   const handleFinalizeBill = async () => {
@@ -179,12 +223,14 @@ export default function VoiceBilling() {
         error: !!item.error
       }));
 
-      const finalTotal = validItems.reduce((sum, item) => sum + (item.item_total || 0), 0);
+      const subTotal = validItems.reduce((sum, item) => sum + (item.item_total || 0), 0);
+      const finalTotal = Math.max(0, subTotal - discountAmount);
       const RAILWAY_CHECKOUT_URL = 'https://web-production-55116.up.railway.app/voice-checkout/';
 
       const payload = {
         user_id: localStorage.getItem('demoUserId'),
         total_bill_amount: finalTotal,
+        discount_amount: discountAmount,
         customer_name: customerName || null,
         is_credit: isCredit,
         items: sanitizedItems
@@ -206,6 +252,8 @@ export default function VoiceBilling() {
       setBillDetails({
         ...billDetails,
         results: sanitizedItems,
+        sub_total: subTotal,
+        discount_amount: discountAmount,
         total_bill_amount: finalTotal,
         customer_name: customerName,
         is_credit: isCredit
@@ -283,7 +331,10 @@ export default function VoiceBilling() {
             
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#e6f4ea', padding: '0.75rem 1rem', borderRadius: '8px' }}>
               <span style={{ fontWeight: '600', color: '#1e8e3e' }}>कुल राशि (Total):</span>
-              <span style={{ fontWeight: 'bold', fontSize: '1.2rem', color: '#1e8e3e' }}>₹{calculateGrandTotal().toFixed(2)}</span>
+              <span style={{ fontWeight: 'bold', fontSize: '1.2rem', color: '#1e8e3e' }}>
+                ₹{calculateGrandTotal().toFixed(2)} 
+                {discountAmount > 0 && <span style={{ fontSize: '0.8rem', color: '#14532d', marginLeft: '8px' }}>(₹{discountAmount} छूट)</span>}
+              </span>
             </div>
           </div>
 
@@ -310,9 +361,11 @@ export default function VoiceBilling() {
                  )}
                </div>
 
-               {(isRecording || realtimeText) && !billPreview && (
+               {(isRecording || realtimeText || (billDetails && billDetails.spoken_text)) && (
                  <div style={{ marginTop: '1rem', width: '100%', padding: '1rem', backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px' }}>
-                   <p style={{ fontSize: '1rem', color: '#14532d', margin: 0 }}>{realtimeText || "बोलना शुरू करें..."}</p>
+                   <p style={{ fontSize: '1rem', color: '#14532d', margin: 0 }}>
+                     {(billDetails && billDetails.spoken_text) ? billDetails.spoken_text : (realtimeText || "बोलना शुरू करें...")}
+                   </p>
                  </div>
                )}
 
@@ -342,11 +395,17 @@ export default function VoiceBilling() {
                         <td className="item-col">
                           <input 
                             type="text" 
+                            list={`stock-options-${i}`}
                             value={res.item_name || ''} 
-                            onChange={(e) => handlePreviewEdit(i, 'item_name', e.target.value)}
+                            onChange={(e) => handleItemSelect(i, e.target.value)}
                             style={{ width: '100%', minWidth: '90px', border: 'none', backgroundColor: 'transparent', fontWeight: 'bold', color: 'var(--text-dark)', fontSize: '0.9rem' }}
                             placeholder="आइटम का नाम"
                           />
+                          <datalist id={`stock-options-${i}`}>
+                            {stockList.map(stock => (
+                              <option key={stock.id} value={stock.master_inventory?.item_name} />
+                            ))}
+                          </datalist>
                           {res.error && <div style={{ color: 'red', fontSize: '0.7rem', marginTop: '2px' }}>{res.error === true ? 'नहीं मिला (Not Found)' : res.error}</div>}
                         </td>
                         <td>
@@ -359,13 +418,33 @@ export default function VoiceBilling() {
                             <Stepper value={res.quantity_billed || 0} onChange={(val) => handlePreviewEdit(i, 'quantity_billed', val)} />
                           </div>
                         </td>
-                        <td style={{ fontWeight: 'bold', color: 'var(--primary-blue)' }}>
-                          ₹{res.item_total || 0}
+                        <td style={{ fontWeight: 'bold', color: 'var(--primary-blue)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span>₹{res.item_total || 0}</span>
+                          <Trash2 size={16} color="var(--danger)" style={{ cursor: 'pointer', marginLeft: '6px' }} onClick={() => handleRemoveItem(i)} />
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                
+                <div style={{ padding: '0.5rem', borderTop: '1px solid #e5e7eb', textAlign: 'center', backgroundColor: '#f9fafb' }}>
+                  <button onClick={handleAddBlankItem} style={{ color: 'var(--primary-blue)', fontWeight: 'bold', border: 'none', background: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', width: '100%', padding: '0.5rem' }}>
+                    <Plus size={18} /> आइटम जोड़ें (Add Item)
+                  </button>
+                </div>
+                <div style={{ padding: '0.75rem 1rem', borderTop: '1px solid #e5e7eb', backgroundColor: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontWeight: 'bold', color: 'var(--text-dark)' }}>छूट (Discount):</span>
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
+                    <span style={{ marginRight: '4px', fontWeight: 'bold', color: 'var(--text-dark)' }}>₹</span>
+                    <input 
+                      type="number" 
+                      value={discountAmount || ''}
+                      onChange={(e) => setDiscountAmount(parseFloat(e.target.value) || 0)}
+                      placeholder="0"
+                      style={{ width: '80px', padding: '0.4rem', borderRadius: '4px', border: '1px solid #ccc', textAlign: 'right', fontWeight: 'bold' }}
+                    />
+                  </div>
+                </div>
               </div>
             )}
           </div>
@@ -377,13 +456,27 @@ export default function VoiceBilling() {
                 <span>{billPreview.length} आइटम ({billPreview.length} ITEMS)</span>
                 <span>कुल (Total): ₹{calculateGrandTotal().toFixed(2)}</span>
               </div>
-              <button 
-                className="btn btn-primary" 
-                style={{ width: '100%', padding: '1rem', fontSize: '1.1rem', borderRadius: '8px' }}
-                onClick={() => setViewState('settlement')}
-              >
-                <FileText size={20} style={{ marginRight: '8px' }} /> बिल देखें (Preview Bill)
-              </button>
+              {(() => {
+                const hasErrors = billPreview.some(item => item.error);
+                return (
+                  <button 
+                    className="btn btn-primary" 
+                    style={{ 
+                      width: '100%', 
+                      padding: '1rem', 
+                      fontSize: '1.1rem', 
+                      borderRadius: '8px',
+                      opacity: hasErrors ? 0.5 : 1,
+                      cursor: hasErrors ? 'not-allowed' : 'pointer'
+                    }}
+                    onClick={() => setViewState('settlement')}
+                    disabled={hasErrors}
+                  >
+                    <FileText size={20} style={{ marginRight: '8px' }} /> 
+                    {hasErrors ? "कृपया त्रुटियों को ठीक करें (Fix Errors First)" : "बिल देखें (Preview Bill)"}
+                  </button>
+                );
+              })()}
             </div>
           )}
         </>
@@ -411,7 +504,14 @@ export default function VoiceBilling() {
                 </div>
               ))}
               
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #e5e7eb', fontWeight: 'bold', fontSize: '1.1rem', color: 'var(--primary-blue)' }}>
+              {discountAmount > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #e5e7eb', fontSize: '1rem', color: 'var(--danger)' }}>
+                  <span>छूट (Discount)</span>
+                  <span>-₹{discountAmount.toFixed(2)}</span>
+                </div>
+              )}
+              
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: discountAmount > 0 ? '0.5rem' : '1rem', paddingTop: discountAmount > 0 ? '0.5rem' : '1rem', borderTop: discountAmount > 0 ? 'none' : '1px solid #e5e7eb', fontWeight: 'bold', fontSize: '1.1rem', color: 'var(--primary-blue)' }}>
                 <span>कुल राशि (Grand Total)</span>
                 <span>₹{calculateGrandTotal().toFixed(2)}</span>
               </div>
@@ -480,6 +580,8 @@ export default function VoiceBilling() {
               setBillDetails(null);
               setCustomerName('');
               setIsCredit(false);
+              setRealtimeText('');
+              setDiscountAmount(0);
             }}
           >
             नया बिल शुरू करें (Start New Bill)
@@ -520,7 +622,19 @@ export default function VoiceBilling() {
             </tbody>
           </table>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '14px', borderTop: '2px dashed #ccc', paddingTop: '10px' }}>
+          {billDetails.discount_amount > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', borderTop: '2px dashed #ccc', paddingTop: '10px' }}>
+              <span>उप-कुल (Subtotal)</span>
+              <span>₹{billDetails.sub_total.toFixed(2)}</span>
+            </div>
+          )}
+          {billDetails.discount_amount > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#b91c1c' }}>
+              <span>छूट (Discount)</span>
+              <span>-₹{billDetails.discount_amount.toFixed(2)}</span>
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '14px', borderTop: billDetails.discount_amount > 0 ? 'none' : '2px dashed #ccc', paddingTop: billDetails.discount_amount > 0 ? '5px' : '10px' }}>
             <span>कुल राशि (Grand Total)</span>
             <span>₹{billDetails.total_bill_amount.toFixed(2)}</span>
           </div>

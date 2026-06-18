@@ -110,7 +110,7 @@ export default function Home() {
           </div>
 
           <div 
-            onClick={() => navigate('/reports')}
+            onClick={() => navigate('/past-bills')}
             style={{ backgroundColor: 'white', padding: '1.5rem', borderRadius: '12px', boxShadow: 'var(--shadow-sm)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', border: '1px solid #e5e7eb' }}
           >
             <div style={{ backgroundColor: '#fef2f2', padding: '12px', borderRadius: '50%' }}>

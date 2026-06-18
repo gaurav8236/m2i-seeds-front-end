@@ -4,12 +4,12 @@ import { Trash2, Plus } from 'lucide-react';
 
 export default function InventoryForm() {
   const [itemName, setItemName] = useState('');
-  const [category, setCategory] = useState('अनाज');
-  const [unit, setUnit] = useState('किलोग्राम');
+  const [category, setCategory] = useState('');
+  const [unit, setUnit] = useState('');
   const [price, setPrice] = useState('');
   const [currentStock, setCurrentStock] = useState('');
-  const [lowStockLimit, setLowStockLimit] = useState(40);
-  const [aliases, setAliases] = useState(['चावल', 'बासमती', 'सवाल']);
+  const [lowStockLimit, setLowStockLimit] = useState(10);
+  const [aliases, setAliases] = useState([]);
   const [newAlias, setNewAlias] = useState('');
 
   const [suggestions, setSuggestions] = useState([]);
@@ -43,6 +43,7 @@ export default function InventoryForm() {
           current_stock,
           selling_price,
           low_stock_limit,
+          aliases,
           master_inventory (
             item_name,
             category,
@@ -72,35 +73,22 @@ export default function InventoryForm() {
     fetchCurrentStock();
   }, []);
 
-  // Search Master Inventory
-  const searchMasterInventory = async (query) => {
-    setItemName(query);
-    if (query.length < 2) {
-      setSuggestions([]);
-      return;
-    }
+  const uniqueCategories = [...new Set(stockList.map(s => s.master_inventory?.category).filter(Boolean))];
+  const uniqueUnits = [...new Set(stockList.map(s => s.master_inventory?.unit).filter(Boolean))];
+
+  const handleItemNameChange = (e) => {
+    const val = e.target.value;
+    setItemName(val);
     
-    setIsSearching(true);
-    try {
-      // NOTE: Replace with actual query when DB is connected
-      const { data, error } = await supabase
-        .from('master_inventory')
-        .select('item_name, category, unit')
-        .ilike('item_name', `%${query}%`)
-        .limit(5);
-
-      if (data) setSuggestions(data);
-    } catch (e) {
-      console.error(e);
+    const existing = stockList.find(s => s.master_inventory?.item_name === val);
+    if (existing) {
+      setCategory(existing.master_inventory?.category || '');
+      setUnit(existing.master_inventory?.unit || '');
+      setPrice(existing.selling_price || '');
+      setCurrentStock(existing.current_stock || '');
+      setLowStockLimit(existing.low_stock_limit || 10);
+      setAliases(existing.aliases || []);
     }
-    setIsSearching(false);
-  };
-
-  const handleSelectSuggestion = (item) => {
-    setItemName(item.item_name);
-    setCategory(item.category);
-    setUnit(item.unit);
-    setSuggestions([]);
   };
 
   const handleAddAlias = (e) => {
@@ -135,9 +123,12 @@ export default function InventoryForm() {
     
     // Clear form for next item
     setItemName('');
+    setCategory('');
+    setUnit('');
     setPrice('');
     setCurrentStock('');
     setAliases([]); 
+    setLowStockLimit(10);
   };
 
   const handleRemoveFromPreview = (index) => {
@@ -186,129 +177,143 @@ export default function InventoryForm() {
   };
 
   return (
-    <div>
-      <h1>सामान जोड़े</h1>
-      
-      <form onSubmit={(e) => { e.preventDefault(); handleAddToPreview(); }}>
-        <div className="form-group" style={{ position: 'relative' }}>
-          <label>आइटम का नाम</label>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
+    <div style={{ minHeight: '100vh', backgroundColor: '#f0f4f8', paddingBottom: '100px' }}>
+      {/* Header */}
+      <div style={{ backgroundColor: 'var(--primary-blue)', padding: '1.5rem 1rem', borderBottomLeftRadius: '16px', borderBottomRightRadius: '16px', color: 'white', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <Plus size={24} color="white" />
+        <div>
+          <h1 style={{ margin: 0, fontSize: '1.2rem' }}>स्टॉक जोड़ें / अपडेट करें</h1>
+          <p style={{ margin: 0, opacity: 0.8, fontSize: '0.85rem', marginTop: '2px' }}>Add or Update Inventory</p>
+        </div>
+      </div>
+
+      <div style={{ padding: '1rem' }}>
+        <form onSubmit={(e) => { e.preventDefault(); handleAddToPreview(); }} style={{ backgroundColor: 'white', padding: '1.5rem', borderRadius: '12px', boxShadow: 'var(--shadow-sm)', border: '1px solid #e5e7eb' }}>
+          
+          <div className="form-group">
+            <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>आइटम का नाम (Item Name)</label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <input 
+                type="text" 
+                className="input-field" 
+                value={itemName}
+                onChange={handleItemNameChange}
+                placeholder="उदा. Basmati Rice"
+                list="inventory-list"
+                required
+              />
+              <datalist id="inventory-list">
+                {stockList.map(stock => (
+                  <option key={stock.id} value={stock.master_inventory?.item_name} />
+                ))}
+              </datalist>
+              <button type="button" className="btn btn-outline" style={{ padding: '0.75rem', borderColor: '#e5e7eb' }} onClick={() => { setItemName(''); setCategory(''); setUnit(''); setPrice(''); setCurrentStock(''); setAliases([]); setLowStockLimit(10); }}>
+                <Trash2 size={20} color="var(--danger)" />
+              </button>
+            </div>
+          </div>
+
+          <div className="form-group grid-2">
+            <div>
+              <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>श्रेणी (Category)</label>
+              <input 
+                type="text"
+                list="category-list"
+                className="input-field" 
+                value={category} 
+                onChange={e => setCategory(e.target.value)}
+                placeholder="उदा. अनाज"
+                required
+              />
+              <datalist id="category-list">
+                {uniqueCategories.map(cat => <option key={cat} value={cat} />)}
+              </datalist>
+            </div>
+            <div>
+              <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>इकाई (Unit)</label>
+              <input 
+                type="text"
+                list="unit-list"
+                className="input-field" 
+                value={unit} 
+                onChange={e => setUnit(e.target.value)}
+                placeholder="उदा. किलोग्राम"
+                required
+              />
+              <datalist id="unit-list">
+                {uniqueUnits.map(u => <option key={u} value={u} />)}
+              </datalist>
+            </div>
+          </div>
+
+          <div className="form-group grid-2">
+            <div>
+              <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>कीमत (Price)</label>
+              <input 
+                type="number" 
+                className="input-field" 
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+                placeholder="₹"
+                required
+              />
+            </div>
+            <div>
+              <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>स्टॉक (Current Stock)</label>
+              <input 
+                type="number" 
+                className="input-field" 
+                value={currentStock}
+                onChange={(e) => setCurrentStock(e.target.value)}
+                placeholder="0"
+                required
+              />
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>उपनाम (Aliases)</label>
             <input 
               type="text" 
               className="input-field" 
-              value={itemName}
-              onChange={(e) => searchMasterInventory(e.target.value)}
-              placeholder="Basmati Chawal (Rice)"
-              required
+              placeholder="बोलने के अन्य नाम (type and hit enter)"
+              value={newAlias}
+              onChange={(e) => setNewAlias(e.target.value)}
+              onKeyDown={handleAddAlias}
             />
-            <button type="button" className="btn btn-outline" style={{ padding: '0.75rem' }}>
-              <Trash2 size={20} />
-            </button>
+            {aliases.length > 0 && (
+              <div className="chip-container" style={{ marginTop: '0.5rem' }}>
+                {aliases.map((alias, index) => (
+                  <span key={index} className="chip" style={{ backgroundColor: '#f3f4f6', border: '1px solid #e5e7eb', color: 'var(--text-dark)' }}>
+                    {alias}
+                    <button type="button" onClick={() => handleRemoveAlias(index)} style={{ color: 'var(--text-muted)' }}>×</button>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
-          
-          {suggestions.length > 0 && (
-            <ul style={{
-              position: 'absolute', width: '100%', background: 'white', 
-              border: '1px solid #e5e7eb', borderRadius: '8px', zIndex: 10,
-              listStyle: 'none', padding: 0, marginTop: '4px', boxShadow: 'var(--shadow-md)'
-            }}>
-              {suggestions.map((item, i) => (
-                <li 
-                  key={i} 
-                  style={{ padding: '0.75rem 1rem', cursor: 'pointer', borderBottom: '1px solid #e5e7eb' }}
-                  onClick={() => handleSelectSuggestion(item)}
-                >
-                  {item.item_name} <small style={{color: 'gray'}}>({item.category})</small>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
 
-        <div className="form-group grid-2">
-          <div>
-            <label>श्रेणी</label>
-            <select className="input-field" value={category} onChange={e => setCategory(e.target.value)}>
-              <option value="अनाज">अनाज (Grain)</option>
-              <option value="दाल">दाल (Pulses)</option>
-              <option value="मसाले">मसाले (Spices)</option>
-            </select>
+          <div className="form-group" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <label style={{ margin: 0, color: 'var(--text-dark)', fontWeight: 'bold' }}>कम स्टॉक अलर्ट (Low Stock Alert)</label>
+            <span style={{ color: 'var(--primary-blue)', fontWeight: 'bold', backgroundColor: '#eff6ff', padding: '2px 8px', borderRadius: '12px', fontSize: '0.85rem' }}>
+              {lowStockLimit} {unit}
+            </span>
           </div>
-          <div>
-            <label>इकाई</label>
-            <select className="input-field" value={unit} onChange={e => setUnit(e.target.value)}>
-              <option value="किलोग्राम">किलोग्राम</option>
-              <option value="ग्राम">ग्राम</option>
-              <option value="लीटर">लीटर</option>
-              <option value="पीस">पीस</option>
-            </select>
+          <div className="form-group">
+            <input 
+              type="range" 
+              min="0" max="100" 
+              value={lowStockLimit}
+              onChange={(e) => setLowStockLimit(e.target.value)}
+              style={{ width: '100%', cursor: 'pointer', accentColor: 'var(--primary-blue)' }}
+            />
           </div>
-        </div>
 
-        <div className="form-group">
-          <label>कीमत (रु/किलोग्राम)</label>
-          <input 
-            type="number" 
-            className="input-field" 
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-          />
-        </div>
-
-        <div className="form-group">
-          <label>उपनाम</label>
-          <input 
-            type="text" 
-            className="input-field" 
-            placeholder="Type alias and press Enter"
-            value={newAlias}
-            onChange={(e) => setNewAlias(e.target.value)}
-            onKeyDown={handleAddAlias}
-          />
-          <div className="chip-container">
-            {aliases.map((alias, index) => (
-              <span key={index} className="chip">
-                {alias}
-                <button type="button" onClick={() => handleRemoveAlias(index)}>×</button>
-              </span>
-            ))}
-          </div>
-        </div>
-
-        <div className="form-group">
-          <label>स्टॉक</label>
-          <input 
-            type="number" 
-            className="input-field" 
-            value={currentStock}
-            onChange={(e) => setCurrentStock(e.target.value)}
-          />
-        </div>
-
-        <div className="form-group" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <label style={{ margin: 0 }}>कम आइटम लिमिट</label>
-          <span style={{ color: 'var(--primary-blue)', fontWeight: 'bold' }}>{lowStockLimit} {unit === 'किलोग्राम' ? 'kg' : unit}</span>
-        </div>
-        <div className="form-group">
-          <input 
-            type="range" 
-            min="0" max="100" 
-            value={lowStockLimit}
-            onChange={(e) => setLowStockLimit(e.target.value)}
-            style={{ width: '100%', cursor: 'pointer' }}
-          />
-        </div>
-
-        <div className="grid-2" style={{ marginTop: '2rem' }}>
-          <button type="button" className="btn btn-outline" onClick={() => {
-            setItemName(''); setPrice(''); setCurrentStock(''); setAliases([]);
-          }}>हटाएं (Clear Form)</button>
-          <button type="button" className="btn btn-primary" onClick={handleAddToPreview}>
-            <Plus size={18} style={{ marginRight: '8px' }} />
-            नया सामान (Add to Preview)
+          <button type="button" className="btn btn-primary" onClick={handleAddToPreview} style={{ width: '100%', padding: '1rem', marginTop: '1rem', borderRadius: '8px' }}>
+            <Plus size={20} style={{ marginRight: '8px' }} />
+            समीक्षा में जोड़ें (Add to Preview)
           </button>
-        </div>
-      </form>
+        </form>
 
       {/* PREVIEW TABLE */}
       {previewItems.length > 0 && (
@@ -379,6 +384,7 @@ export default function InventoryForm() {
           </table>
         </div>
       )}
+      </div>
     </div>
   );
 }
