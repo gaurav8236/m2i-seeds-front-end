@@ -132,24 +132,26 @@ export default function Reports() {
   );
 
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#f0f4f8', paddingBottom: '100px' }}>
+    <div style={{ minHeight: '100vh', backgroundColor: 'var(--bg)', paddingBottom: '100px' }}>
       
       {/* Header */}
-      <div style={{ 
-        backgroundColor: 'var(--primary-blue)', 
-        padding: '1.5rem 1rem', 
-        borderBottomLeftRadius: '16px', 
-        borderBottomRightRadius: '16px', 
-        color: 'white', 
-        display: 'flex', 
-        alignItems: 'center', 
-        gap: '0.75rem',
-        boxShadow: 'var(--shadow-md)'
+      <div style={{
+        background: 'var(--primary-gradient)',
+        padding: '1.25rem 1rem 1.5rem',
+        borderBottomLeftRadius: '20px',
+        borderBottomRightRadius: '20px',
+        color: 'white',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.875rem',
+        boxShadow: '0 4px 20px rgba(13,71,161,0.25)',
       }}>
-        <Users size={26} color="white" />
+        <div style={{ width: 40, height: 40, background: 'rgba(255,255,255,0.18)', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(255,255,255,0.3)', flexShrink: 0 }}>
+          <Users size={22} color="white" />
+        </div>
         <div>
-          <h1 style={{ margin: 0, fontSize: '1.3rem', color: 'white' }}>ग्राहक खाता</h1>
-          <p style={{ margin: 0, opacity: 0.8, fontSize: '0.85rem', marginTop: '2px' }}>Customer Ledger</p>
+          <h1 style={{ margin: 0, fontSize: '1.25rem', color: 'white', fontWeight: 700, letterSpacing: '-0.01em' }}>ग्राहक खाता</h1>
+          <p style={{ margin: 0, color: 'rgba(255,255,255,0.88)', fontSize: '0.78rem', marginTop: '2px' }}>Customer Ledger</p>
         </div>
       </div>
 
@@ -185,7 +187,7 @@ export default function Reports() {
               const balance = Math.max(0, customerData.total_due);
 
               return (
-                <div key={name} className={`product-card ${isHighBalance ? 'low-stock' : 'in-stock'} animate-fade-in`}>
+                <div key={name} style={{ background: 'white', borderRadius: '14px', border: '1px solid #e2e8f0', borderLeft: `3px solid ${isHighBalance ? '#dc2626' : '#1a56db'}`, padding: '1rem', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
                   
                   {/* Customer Card Header */}
                   <div 
@@ -213,7 +215,7 @@ export default function Reports() {
                         )}
                       </div>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        {customerData.bills.length} लेनदेन (transactions)
+                        {customerData.bills.length} लेनदेन
                       </div>
                     </div>
                     <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -222,7 +224,7 @@ export default function Reports() {
                           ₹{balance.toFixed(2)}
                         </div>
                         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                          {balance > 0 ? 'बकाया (Due)' : 'क्लियर (Cleared)'}
+                          {balance > 0 ? 'बकाया' : 'चुकता'}
                         </div>
                       </div>
                       {isExpanded ? <ChevronUp size={20} color="var(--text-muted)" /> : <ChevronDown size={20} color="var(--text-muted)" />}
@@ -254,11 +256,11 @@ export default function Reports() {
                             gap: '8px'
                           }}
                         >
-                          <IndianRupee size={16} /> जमा करें (Record Payment)
+                          <IndianRupee size={16} /> भुगतान दर्ज करें
                         </button>
                       )}
 
-                      <h4 style={{ margin: '0 0 0.75rem 0', color: 'var(--primary-blue)', fontSize: '0.85rem', fontWeight: '700' }}>लेन-देन विवरण (Transactions)</h4>
+                      <h4 style={{ margin: '0 0 0.75rem 0', color: '#1a56db', fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>लेन-देन विवरण</h4>
 
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                         {customerData.bills.map((bill) => (
@@ -327,8 +329,8 @@ export default function Reports() {
             </div>
 
             <div style={{ marginBottom: '1.2rem' }}>
-              <label style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-dark)', marginBottom: '6px', display: 'block' }}>
-                राशि दर्ज करें (Enter Payment Amount)
+              <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748b', marginBottom: '6px', display: 'block', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                राशि दर्ज करें
               </label>
               <div style={{ display: 'flex', alignItems: 'center', border: '1.5px solid var(--primary-blue)', borderRadius: '8px', overflow: 'hidden' }}>
                 <span style={{ padding: '0.75rem', backgroundColor: '#eff6ff', color: 'var(--primary-blue)', fontWeight: 'bold', fontSize: '1.1rem' }}>₹</span>
@@ -366,7 +368,7 @@ export default function Reports() {
               onClick={handleRecordPayment}
               disabled={paymentLoading}
             >
-              {paymentLoading ? 'सहेज रहे हैं...' : '✓ भुगतान दर्ज करें (Confirm Payment)'}
+              {paymentLoading ? 'सहेज रहे हैं...' : '✓ भुगतान दर्ज करें'}
             </button>
           </div>
         </div>

@@ -243,23 +243,25 @@ export default function InventoryForm() {
   });
 
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#f0f4f8', paddingBottom: '100px' }}>
+    <div style={{ minHeight: '100vh', backgroundColor: 'var(--bg)', paddingBottom: '100px' }}>
       {/* Header */}
-      <div style={{ 
-        backgroundColor: 'var(--primary-blue)', 
-        padding: '1.5rem 1rem', 
-        borderBottomLeftRadius: '16px', 
-        borderBottomRightRadius: '16px', 
-        color: 'white', 
-        display: 'flex', 
-        alignItems: 'center', 
-        gap: '0.75rem',
-        boxShadow: 'var(--shadow-md)'
+      <div style={{
+        background: 'var(--primary-gradient)',
+        padding: '1.25rem 1rem 1.5rem',
+        borderBottomLeftRadius: '20px',
+        borderBottomRightRadius: '20px',
+        color: 'white',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.875rem',
+        boxShadow: '0 4px 20px rgba(13,71,161,0.25)',
       }}>
-        <Package size={26} color="white" />
+        <div style={{ width: 40, height: 40, background: 'rgba(255,255,255,0.18)', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(255,255,255,0.3)', flexShrink: 0 }}>
+          <Package size={22} color="white" />
+        </div>
         <div>
-          <h1 style={{ margin: 0, fontSize: '1.3rem', color: 'white' }}>इन्वेंट्री प्रबंधन</h1>
-          <p style={{ margin: 0, opacity: 0.8, fontSize: '0.85rem', marginTop: '2px' }}>Inventory Management</p>
+          <h1 style={{ margin: 0, fontSize: '1.25rem', color: 'white', fontWeight: 700, letterSpacing: '-0.01em' }}>इन्वेंट्री प्रबंधन</h1>
+          <p style={{ margin: 0, color: 'rgba(255,255,255,0.88)', fontSize: '0.78rem', marginTop: '2px' }}>Inventory Management</p>
         </div>
       </div>
 
@@ -271,13 +273,13 @@ export default function InventoryForm() {
             className={`segment-btn ${activeTab === 'add' ? 'active' : ''}`}
             onClick={() => setActiveTab('add')}
           >
-            <Plus size={18} /> स्टॉक जोड़ें (Add Item)
+            <Plus size={18} /> सामान जोड़ें
           </button>
           <button 
             className={`segment-btn ${activeTab === 'list' ? 'active' : ''}`}
             onClick={() => setActiveTab('list')}
           >
-            <Package size={18} /> स्टॉक सूची (Stock List)
+            <Package size={18} /> स्टॉक सूची
           </button>
         </div>
 
@@ -297,7 +299,7 @@ export default function InventoryForm() {
               
               {/* Custom Search-as-you-type autocomplete input */}
               <div className="form-group" ref={autocompleteRef}>
-                <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>आइटम का नाम (Item Name)</label>
+                <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>सामान का नाम</label>
                 <div style={{ display: 'flex', gap: '0.5rem', position: 'relative' }} className="autocomplete-wrapper">
                   <input 
                     type="text" 
@@ -347,7 +349,7 @@ export default function InventoryForm() {
               {/* Grid for Category and Unit */}
               <div className="form-group grid-2">
                 <div>
-                  <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>श्रेणी (Category)</label>
+                  <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>श्रेणी</label>
                   <input 
                     type="text"
                     list="category-list"
@@ -362,7 +364,7 @@ export default function InventoryForm() {
                   </datalist>
                 </div>
                 <div>
-                  <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>इकाई (Unit)</label>
+                  <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>इकाई</label>
                   <input 
                     type="text"
                     list="unit-list"
@@ -381,7 +383,7 @@ export default function InventoryForm() {
               {/* Grid for Price and Current Stock */}
               <div className="form-group grid-2">
                 <div>
-                  <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>बेचने की कीमत (Price)</label>
+                  <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>बिक्री कीमत (₹)</label>
                   <input 
                     type="number" 
                     className="input-field" 
@@ -394,7 +396,7 @@ export default function InventoryForm() {
                   />
                 </div>
                 <div>
-                  <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>स्टॉक (Current Stock)</label>
+                  <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>वर्तमान स्टॉक</label>
                   <input 
                     type="number" 
                     className="input-field" 
@@ -410,7 +412,7 @@ export default function InventoryForm() {
 
               {/* Alias input with a explicit Add '+' button */}
               <div className="form-group">
-                <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>उपनाम (Aliases - बोलने के नाम)</label>
+                <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>बोलने के नाम (Voice Aliases)</label>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                   <input 
                     type="text" 
@@ -444,7 +446,7 @@ export default function InventoryForm() {
               {/* Low Stock Limit visual selector */}
               <div className="form-group">
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <label style={{ margin: 0, color: 'var(--text-dark)', fontWeight: 'bold' }}>कम स्टॉक चेतावनी अलर्ट (Alert Threshold)</label>
+                  <label style={{ margin: 0, color: 'var(--text-dark)', fontWeight: 'bold' }}>कम स्टॉक चेतावनी</label>
                   <span style={{ 
                     color: 'var(--primary-blue)', 
                     fontWeight: 'bold', 
@@ -500,7 +502,7 @@ export default function InventoryForm() {
                 style={{ width: '100%', padding: '1rem', marginTop: '0.5rem', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
               >
                 <Plus size={20} style={{ marginRight: '8px' }} />
-                समीक्षा सूची में डालें (Add to Draft)
+                समीक्षा सूची में जोड़ें
               </button>
             </form>
 
@@ -525,7 +527,7 @@ export default function InventoryForm() {
                   fontSize: '1.1rem',
                   marginBottom: '1rem'
                 }}>
-                  <FileText size={20} /> सहेजने से पहले समीक्षा (Draft List - {previewItems.length})
+                  <FileText size={20} /> समीक्षा सूची ({previewItems.length})
                 </h3>
 
                 <div className="cards-list">
@@ -580,7 +582,7 @@ export default function InventoryForm() {
                   style={{ width: '100%', backgroundColor: 'var(--success)', marginTop: '1.2rem', padding: '1rem', borderRadius: '10px' }}
                 >
                   <Check size={20} style={{ marginRight: '8px' }} />
-                  सभी को स्टॉक में जोड़ें (Submit Draft to Stock)
+                  सभी को स्टॉक में जोड़ें 
                 </button>
               </div>
             )}
@@ -638,43 +640,42 @@ export default function InventoryForm() {
                 filteredStockList.map(stock => {
                   const isLow = stock.current_stock <= stock.low_stock_limit;
                   return (
-                    <div 
-                      key={stock.id} 
-                      className={`product-card ${isLow ? 'low-stock' : 'in-stock'} animate-fade-in`}
+                    <div
+                      key={stock.id}
+                      style={{ background: 'white', borderRadius: '20px', border: `1px solid ${isLow ? '#fecaca' : '#f1f5f9'}`, padding: '1rem 1.125rem', boxShadow: '0 2px 12px rgba(0,0,0,0.07)', marginBottom: '0.75rem' }}
                     >
-                      <div className="card-header">
+                      {/* Top: name + category + low-stock flag */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                         <div>
-                          <div className="card-title">{stock.master_inventory?.item_name}</div>
-                          <span className="card-category">{stock.master_inventory?.category || 'बिना श्रेणी'}</span>
+                          <div style={{ fontWeight: 700, fontSize: '1rem', color: '#0f172a', lineHeight: 1.2 }}>{stock.master_inventory?.item_name}</div>
+                          <span style={{ fontSize: '0.68rem', color: '#64748b', background: '#f8fafc', padding: '2px 9px', borderRadius: '20px', display: 'inline-block', marginTop: '5px', fontWeight: 500, border: '1px solid #e2e8f0' }}>
+                            {stock.master_inventory?.category || 'सामान्य'}
+                          </span>
                         </div>
-                        <span className={`status-badge ${isLow ? 'status-low' : 'status-ok'}`}>
-                          {isLow ? 'कम स्टॉक (Low)' : 'सुरक्षित (In Stock)'}
-                        </span>
-                      </div>
-                      
-                      <div className="card-metrics-grid">
-                        <div className="metric-cell">
-                          <div className="metric-label">बेचने की कीमत (Price)</div>
-                          <div className="metric-value">₹{stock.selling_price}</div>
-                        </div>
-                        <div className="metric-cell">
-                          <div className="metric-label">उपलब्ध स्टॉक (Qty)</div>
-                          <div className="metric-value" style={{ color: isLow ? 'var(--danger)' : 'var(--text-dark)' }}>
-                            {stock.current_stock} {stock.master_inventory?.unit}
-                          </div>
-                        </div>
+                        {isLow && (
+                          <span style={{ fontSize: '0.68rem', fontWeight: 700, padding: '3px 9px', borderRadius: '20px', background: '#fef2f2', color: '#dc2626', flexShrink: 0, border: '1px solid #fecaca' }}>
+                            ⚠ कम स्टॉक
+                          </span>
+                        )}
                       </div>
 
+                      {/* Price as hero number, stock inline */}
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', marginTop: '0.75rem' }}>
+                        <span style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.03em', lineHeight: 1 }}>₹{stock.selling_price}</span>
+                        <span style={{ fontSize: '0.82rem', color: '#cbd5e1' }}>·</span>
+                        <span style={{ fontSize: '0.9rem', fontWeight: 600, color: isLow ? '#dc2626' : '#475569' }}>
+                          {stock.current_stock} {stock.master_inventory?.unit}
+                        </span>
+                      </div>
+
+                      {/* Aliases as subtle pills */}
                       {stock.aliases && stock.aliases.length > 0 && (
-                        <div style={{ marginTop: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid #f1f5f9' }}>
-                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', marginBottom: '4px' }}>उपनाम (Voice Aliases)</div>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                            {stock.aliases.map((alias, aIdx) => (
-                              <span key={aIdx} style={{ fontSize: '0.75rem', backgroundColor: '#f1f5f9', padding: '2px 8px', borderRadius: '12px', color: 'var(--text-dark)' }}>
-                                {alias}
-                              </span>
-                            ))}
-                          </div>
+                        <div style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                          {stock.aliases.map((alias, aIdx) => (
+                            <span key={aIdx} style={{ fontSize: '0.7rem', background: '#f8fafc', color: '#64748b', padding: '2px 9px', borderRadius: '20px', fontWeight: 500, border: '1px solid #e2e8f0' }}>
+                              {alias}
+                            </span>
+                          ))}
                         </div>
                       )}
                     </div>

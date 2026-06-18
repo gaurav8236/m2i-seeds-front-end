@@ -91,13 +91,24 @@ export default function PastBills() {
   const PERIOD_LABELS = { today: 'आज', week: 'इस सप्ताह', month: 'इस महीने', all: 'सभी' };
 
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#f0f4f8' }}>
+    <div style={{ minHeight: '100vh', backgroundColor: 'var(--bg)' }}>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '1rem', backgroundColor: '#fff', borderBottom: '1px solid #e5e7eb' }}>
-        <ArrowLeft size={24} color="var(--primary-blue)" onClick={() => navigate('/voice-billing')} style={{ cursor: 'pointer' }} />
+      <div style={{
+        background: 'var(--primary-gradient)',
+        padding: '1.25rem 1rem 1.5rem',
+        borderBottomLeftRadius: '20px',
+        borderBottomRightRadius: '20px',
+        boxShadow: '0 4px 20px rgba(13,71,161,0.25)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.875rem',
+      }}>
+        <button onClick={() => navigate('/voice-billing')} style={{ background: 'rgba(255,255,255,0.18)', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', padding: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', color: 'white', flexShrink: 0 }}>
+          <ArrowLeft size={18} />
+        </button>
         <div>
-          <span style={{ fontWeight: 'bold', color: 'var(--primary-blue)', fontSize: '1.2rem' }}>पिछले बिल</span>
-          <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>Sales History</p>
+          <div style={{ color: 'white', fontWeight: 700, fontSize: '1.2rem', letterSpacing: '-0.01em' }}>पिछले बिल</div>
+          <div style={{ color: 'rgba(255,255,255,0.88)', fontSize: '0.78rem', marginTop: '2px' }}>Sales History</div>
         </div>
       </div>
 

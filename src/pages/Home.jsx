@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileText, Package, BarChart2, Users, AlertTriangle, ChevronRight, ArrowUpRight } from 'lucide-react';
+import { Mic, Package, BookOpen, AlertTriangle, ChevronRight, TrendingUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 
@@ -14,306 +14,200 @@ export default function Home() {
     try {
       const date = new Date();
       const firstDay = new Date(date.getFullYear(), date.getMonth(), 1).toISOString();
-
       const { data, error } = await supabase
-        .from('past_bills')
-        .select('total_amount, is_credit')
-        .eq('user_id', userId)
-        .gte('created_at', firstDay);
-
+        .from('past_bills').select('total_amount, is_credit')
+        .eq('user_id', userId).gte('created_at', firstDay);
       if (error) throw error;
-
-      let totalCredit = 0;
-      let totalPaid = 0;
-      
-      if (data) {
-        data.forEach(bill => {
-          const amount = parseFloat(bill.total_amount) || 0;
-          if (bill.is_credit) {
-            totalCredit += amount;
-          } else {
-            totalPaid += amount;
-          }
-        });
-      }
-
-      setStats({
-        credit: totalCredit,
-        paid: totalPaid,
-        balance: totalCredit // Outstanding balance is total credit
+      let totalCredit = 0, totalPaid = 0;
+      (data || []).forEach(bill => {
+        const amount = parseFloat(bill.total_amount) || 0;
+        if (bill.is_credit) totalCredit += amount; else totalPaid += amount;
       });
-    } catch (e) {
-      console.error('Error fetching dashboard stats:', e);
-    }
+      setStats({ credit: totalCredit, paid: totalPaid, balance: totalCredit });
+    } catch (e) { console.error(e); }
   };
 
   const fetchLowStockCount = async (userId) => {
     try {
       const { data, error } = await supabase
-        .from('user_stock')
-        .select('current_stock, low_stock_limit')
-        .eq('user_id', userId);
-
+        .from('user_stock').select('current_stock, low_stock_limit').eq('user_id', userId);
       if (error) throw error;
-
-      if (data) {
-        const lowItems = data.filter(item => item.current_stock <= item.low_stock_limit);
-        setLowStockCount(lowItems.length);
-      }
-    } catch (e) {
-      console.error('Error fetching low stock count:', e);
-    }
+      setLowStockCount((data || []).filter(i => i.current_stock <= i.low_stock_limit).length);
+    } catch (e) { console.error(e); }
   };
 
   const fetchRecentBills = async (userId) => {
     try {
       const { data, error } = await supabase
-        .from('past_bills')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(3);
-
+        .from('past_bills').select('*').eq('user_id', userId)
+        .order('created_at', { ascending: false }).limit(4);
       if (error) throw error;
       setRecentBills(data || []);
-    } catch (e) {
-      console.error('Error fetching recent bills:', e);
-    }
-  };
-
-  const loadDashboardData = async () => {
-    try {
-      setLoading(true);
-      const userId = localStorage.getItem('demoUserId');
-      if (!userId) {
-        // Fallback: fetch the first user from the DB
-        const { data: users } = await supabase.from('users').select('id').limit(1);
-        if (users && users.length > 0) {
-          const id = users[0].id;
-          localStorage.setItem('demoUserId', id);
-          await loadAllStats(id);
-        }
-      } else {
-        await loadAllStats(userId);
-      }
-    } catch (e) {
-      console.error('Error loading dashboard:', e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadAllStats = async (userId) => {
-    await Promise.all([
-      fetchMonthStats(userId),
-      fetchLowStockCount(userId),
-      fetchRecentBills(userId)
-    ]);
+    } catch (e) { console.error(e); }
   };
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      loadDashboardData();
-    }, 0);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const load = async () => {
+      setLoading(true);
+      try {
+        let userId = localStorage.getItem('demoUserId');
+        if (!userId) {
+          const { data: users } = await supabase.from('users').select('id').limit(1);
+          if (users?.length > 0) { userId = users[0].id; localStorage.setItem('demoUserId', userId); }
+        }
+        if (userId) await Promise.all([fetchMonthStats(userId), fetchLowStockCount(userId), fetchRecentBills(userId)]);
+      } catch (e) { console.error(e); }
+      finally { setLoading(false); }
+    };
+    load();
   }, []);
 
-  const formatDate = (isoString) => {
-    const d = new Date(isoString);
-    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
-  };
+  const fmt = (n) => n >= 1000 ? `₹${(n / 1000).toFixed(1)}k` : `₹${Math.round(n)}`;
+  const fmtDate = (iso) => new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#f0f4f8', paddingBottom: '100px' }}>
-      
-      {/* Header */}
-      <div style={{ 
-        backgroundColor: 'var(--primary-blue)', 
-        padding: '1.8rem 1rem', 
-        borderBottomLeftRadius: '20px', 
-        borderBottomRightRadius: '20px', 
-        color: 'white',
-        boxShadow: 'var(--shadow-md)'
+    <div style={{ minHeight: '100vh', backgroundColor: '#f8fafc', paddingBottom: '80px' }}>
+
+      {/* ── Header ─────────────────────────────── */}
+      <div style={{
+        background: 'linear-gradient(145deg, #0d47a1 0%, #1565c0 60%, #1976d2 100%)',
+        padding: '1.25rem 1.25rem 1.5rem',
+        borderBottomLeftRadius: '24px',
+        borderBottomRightRadius: '24px',
+        boxShadow: '0 8px 24px rgba(13,71,161,0.28)',
       }}>
-        <h1 style={{ margin: 0, fontSize: '1.6rem', color: 'white' }}>दुकानदार सहायक</h1>
-        <p style={{ margin: 0, opacity: 0.85, fontSize: '0.9rem', marginTop: '4px' }}>डैशबोर्ड (Dashboard)</p>
+        {/* Brand */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ width: 36, height: 36, background: 'rgba(255,255,255,0.15)', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(255,255,255,0.25)' }}>
+              <Mic size={18} color="white" />
+            </div>
+            <div>
+              <div style={{ color: 'white', fontWeight: 700, fontSize: '1.05rem', letterSpacing: '-0.01em' }}>SmartDukan</div>
+              <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: '0.68rem' }}>दुकानदार सहायक</div>
+            </div>
+          </div>
+          <div style={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.72rem' }}>
+            {new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+          </div>
+        </div>
+
+        {/* Stats — flat number row, no glass boxes */}
+        <div style={{ display: 'flex', borderTop: '1px solid rgba(255,255,255,0.18)', paddingTop: '1rem', marginTop: '0.25rem' }}>
+          {[
+            { label: 'उधार दिया', value: stats.credit },
+            { label: 'नकद जमा', value: stats.paid },
+            { label: 'बकाया', value: Math.max(0, stats.balance) },
+          ].map(({ label, value }, i) => (
+            <div key={label} style={{ flex: 1, textAlign: 'center', borderRight: i < 2 ? '1px solid rgba(255,255,255,0.18)' : 'none', padding: '0 0.25rem' }}>
+              <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'white', letterSpacing: '-0.03em', lineHeight: 1 }}>
+                {loading ? '—' : fmt(value)}
+              </div>
+              <div style={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.82)', fontWeight: 500, marginTop: '5px' }}>{label}</div>
+            </div>
+          ))}
+        </div>
       </div>
 
-      <div style={{ padding: '1rem' }}>
-        
-        {/* Low Stock Warning Banner */}
+      <div style={{ padding: '1.25rem 1.25rem 0' }}>
+
+        {/* Low stock alert */}
         {!loading && lowStockCount > 0 && (
-          <div 
-            className="warning-banner"
-            onClick={() => navigate('/inventory')}
-          >
-            <AlertTriangle size={18} />
-            <div style={{ flexGrow: 1 }}>
-              आपके <strong>{lowStockCount} सामान</strong> का स्टॉक कम है!
-            </div>
-            <ChevronRight size={16} />
+          <div className="warning-banner" onClick={() => navigate('/inventory')} style={{ marginBottom: '1.25rem' }}>
+            <AlertTriangle size={15} color="#d97706" />
+            <span style={{ flex: 1, fontSize: '0.82rem' }}><strong>{lowStockCount} सामान</strong> का स्टॉक कम है</span>
+            <ChevronRight size={14} />
           </div>
         )}
 
-        {/* Top Summary Tiles (Gradient Style) */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem', marginBottom: '1.5rem' }}>
-          <div className="dashboard-gradient-card credit">
-            <div style={{ fontSize: '0.75rem', fontWeight: 'bold', opacity: 0.9 }}>कुल उधार</div>
-            <div style={{ fontSize: '1.05rem', fontWeight: 'bold', marginTop: '4px' }}>₹{stats.credit.toFixed(0)}</div>
+        {/* Primary CTA */}
+        <div
+          onClick={() => navigate('/voice-billing')}
+          style={{
+            background: 'linear-gradient(135deg, #1a56db 0%, #1d4ed8 100%)',
+            borderRadius: '16px',
+            padding: '1rem 1.25rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '1rem',
+            cursor: 'pointer',
+            marginBottom: '0.75rem',
+            boxShadow: '0 4px 16px rgba(26,86,219,0.3)',
+          }}
+        >
+          <div style={{ width: 44, height: 44, background: 'rgba(255,255,255,0.18)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: '1px solid rgba(255,255,255,0.25)' }}>
+            <Mic size={22} color="white" />
           </div>
-          <div className="dashboard-gradient-card paid">
-            <div style={{ fontSize: '0.75rem', fontWeight: 'bold', opacity: 0.9 }}>कुल जमा</div>
-            <div style={{ fontSize: '1.05rem', fontWeight: 'bold', marginTop: '4px' }}>₹{stats.paid.toFixed(0)}</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ color: 'white', fontWeight: 700, fontSize: '0.95rem' }}>नया बिल बनाएं</div>
+            <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem', marginTop: '2px' }}>बोलकर बिल — हिंदी या English</div>
           </div>
-          <div className="dashboard-gradient-card balance">
-            <div style={{ fontSize: '0.75rem', fontWeight: 'bold', opacity: 0.9 }}>बकाया</div>
-            <div style={{ fontSize: '1.05rem', fontWeight: 'bold', marginTop: '4px' }}>₹{stats.balance.toFixed(0)}</div>
-          </div>
+          <ChevronRight size={18} color="rgba(255,255,255,0.7)" />
         </div>
 
-        {/* Action Tiles Grid */}
-        <h2 style={{ fontSize: '1rem', color: 'var(--text-dark)', marginBottom: '0.8rem', fontWeight: '700' }}>क्विक एक्शन (Quick Actions)</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.8rem' }}>
-          
-          <div 
-            onClick={() => navigate('/voice-billing')}
-            style={{ 
-              backgroundColor: 'white', 
-              padding: '1.2rem', 
-              borderRadius: '16px', 
-              boxShadow: 'var(--shadow-sm)', 
-              display: 'flex', 
-              flexDirection: 'column', 
-              alignItems: 'center', 
-              gap: '0.5rem', 
-              cursor: 'pointer', 
-              border: '1px solid #e5e7eb',
-              transition: 'all 0.2s'
-            }}
-            className="action-card"
-          >
-            <div style={{ backgroundColor: '#eff6ff', padding: '10px', borderRadius: '50%' }}>
-              <FileText size={24} color="var(--primary-blue)" />
+        {/* Secondary actions */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.625rem', marginBottom: '1.5rem' }}>
+          {[
+            { icon: <Package size={20} color="#1a56db" />, bg: '#eff6ff', label: 'स्टॉक', sub: 'Inventory', path: '/inventory' },
+            { icon: <BookOpen size={20} color="#1a56db" />, bg: '#eff6ff', label: 'ग्राहक खाता', sub: 'Ledger', path: '/reports' },
+          ].map(({ icon, bg, label, sub, path }) => (
+            <div
+              key={path}
+              onClick={() => navigate(path)}
+              style={{ background: 'white', borderRadius: '14px', padding: '1rem', border: '1px solid #e2e8f0', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}
+            >
+              <div style={{ width: 38, height: 38, background: bg, borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                {icon}
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0f172a' }}>{label}</div>
+                <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '1px' }}>{sub}</div>
+              </div>
             </div>
-            <span style={{ fontWeight: 'bold', color: 'var(--text-dark)', fontSize: '0.9rem' }}>नया बिल</span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(New Bill)</span>
-          </div>
-
-          <div 
-            onClick={() => navigate('/inventory')}
-            style={{ 
-              backgroundColor: 'white', 
-              padding: '1.2rem', 
-              borderRadius: '16px', 
-              boxShadow: 'var(--shadow-sm)', 
-              display: 'flex', 
-              flexDirection: 'column', 
-              alignItems: 'center', 
-              gap: '0.5rem', 
-              cursor: 'pointer', 
-              border: '1px solid #e5e7eb',
-              transition: 'all 0.2s'
-            }}
-            className="action-card"
-          >
-            <div style={{ backgroundColor: '#f0fdf4', padding: '10px', borderRadius: '50%' }}>
-              <Package size={24} color="#16a34a" />
-            </div>
-            <span style={{ fontWeight: 'bold', color: 'var(--text-dark)', fontSize: '0.9rem' }}>स्टॉक प्रबंधन</span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(Stock)</span>
-          </div>
-
-          <div 
-            onClick={() => navigate('/past-bills')}
-            style={{ 
-              backgroundColor: 'white', 
-              padding: '1.2rem', 
-              borderRadius: '16px', 
-              boxShadow: 'var(--shadow-sm)', 
-              display: 'flex', 
-              flexDirection: 'column', 
-              alignItems: 'center', 
-              gap: '0.5rem', 
-              cursor: 'pointer', 
-              border: '1px solid #e5e7eb',
-              transition: 'all 0.2s'
-            }}
-            className="action-card"
-          >
-            <div style={{ backgroundColor: '#fef2f2', padding: '10px', borderRadius: '50%' }}>
-              <BarChart2 size={24} color="#dc2626" />
-            </div>
-            <span style={{ fontWeight: 'bold', color: 'var(--text-dark)', fontSize: '0.9rem' }}>सेल्स इतिहास</span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(Sales History)</span>
-          </div>
-
-          <div 
-            onClick={() => navigate('/reports')}
-            style={{ 
-              backgroundColor: 'white', 
-              padding: '1.2rem', 
-              borderRadius: '16px', 
-              boxShadow: 'var(--shadow-sm)', 
-              display: 'flex', 
-              flexDirection: 'column', 
-              alignItems: 'center', 
-              gap: '0.5rem', 
-              cursor: 'pointer', 
-              border: '1px solid #e5e7eb',
-              transition: 'all 0.2s'
-            }}
-            className="action-card"
-          >
-            <div style={{ backgroundColor: '#fdf4ff', padding: '10px', borderRadius: '50%' }}>
-              <Users size={24} color="#c026d3" />
-            </div>
-            <span style={{ fontWeight: 'bold', color: 'var(--text-dark)', fontSize: '0.9rem' }}>ग्राहक खाता</span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(Ledger)</span>
-          </div>
-
+          ))}
         </div>
 
-        {/* Recent Activity stream */}
-        <h2 style={{ fontSize: '1rem', color: 'var(--text-dark)', marginBottom: '0.8rem', fontWeight: '700' }}>हाल के बिल (Recent Bills)</h2>
-        <div style={{ backgroundColor: 'white', borderRadius: '16px', border: '1px solid #e5e7eb', overflow: 'hidden', boxShadow: 'var(--shadow-sm)' }}>
+        {/* Recent bills */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.625rem' }}>
+          <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155' }}>हाल के बिल</span>
+          <button onClick={() => navigate('/past-bills')} style={{ background: 'none', border: 'none', color: '#1a56db', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '2px' }}>
+            सभी देखें <ChevronRight size={13} />
+          </button>
+        </div>
+
+        <div style={{ background: 'white', borderRadius: '14px', border: '1px solid #e2e8f0', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', marginBottom: '1.25rem' }}>
           {loading ? (
-            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>लोड हो रहा है...</div>
+            <div style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8', fontSize: '0.85rem' }}>लोड हो रहा है...</div>
           ) : recentBills.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '2.5rem 1rem', color: 'var(--text-muted)' }}>
-              <FileText size={32} style={{ opacity: 0.3, marginBottom: '0.5rem' }} />
-              <p style={{ fontSize: '0.85rem' }}>कोई हालिया बिल नहीं मिला।</p>
+            <div style={{ textAlign: 'center', padding: '2rem 1rem', color: '#94a3b8' }}>
+              <TrendingUp size={28} style={{ opacity: 0.2, display: 'block', margin: '0 auto 0.5rem' }} />
+              <p style={{ fontSize: '0.82rem' }}>अभी तक कोई बिल नहीं</p>
             </div>
           ) : (
-            <div>
-              {recentBills.map(bill => (
-                <div 
-                  key={bill.id} 
-                  className="activity-item"
-                  onClick={() => navigate('/past-bills')}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <div>
-                    <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: 'var(--text-dark)' }}>
-                      {bill.customer_name || 'नकद ग्राहक (Cash Sales)'}
-                    </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                      {formatDate(bill.created_at)} • {bill.bill_details?.length || 0} आइटम
-                    </div>
+            recentBills.map((bill, idx) => (
+              <div
+                key={bill.id}
+                onClick={() => navigate('/past-bills')}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 1rem', borderBottom: idx < recentBills.length - 1 ? '1px solid #f8fafc' : 'none', cursor: 'pointer' }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {bill.customer_name || 'नकद ग्राहक'}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <span style={{ 
-                      fontWeight: 'bold', 
-                      fontSize: '0.95rem',
-                      color: bill.is_credit ? 'var(--danger)' : 'var(--success)'
-                    }}>
-                      ₹{parseFloat(bill.total_amount).toFixed(2)}
-                    </span>
-                    <ArrowUpRight size={14} color="var(--text-muted)" />
+                  <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '2px' }}>
+                    {fmtDate(bill.created_at)} · {bill.bill_details?.length || 0} आइटम
                   </div>
                 </div>
-              ))}
-            </div>
+                <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: '1rem' }}>
+                  <div style={{ fontWeight: 800, fontSize: '1rem', letterSpacing: '-0.02em', color: bill.is_credit ? '#dc2626' : '#16a34a' }}>
+                    {fmt(parseFloat(bill.total_amount))}
+                  </div>
+                  <div style={{ fontSize: '0.62rem', color: bill.is_credit ? '#dc2626' : '#16a34a', marginTop: '1px', opacity: 0.8 }}>
+                    {bill.is_credit ? 'उधार' : 'नकद'}
+                  </div>
+                </div>
+              </div>
+            ))
           )}
         </div>
       </div>
