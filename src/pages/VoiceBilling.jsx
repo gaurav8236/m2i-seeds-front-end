@@ -3,6 +3,7 @@ import { Mic, FileText, CheckCircle, ArrowLeft, Printer, History, Trash2, Plus, 
 import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import jsPDF from 'jspdf';
+import LogRocket from 'logrocket';
 import html2canvas from 'html2canvas';
 
 export default function VoiceBilling() {
@@ -27,6 +28,7 @@ export default function VoiceBilling() {
 
   const mediaRecorderRef = useRef(null);
   const recognitionRef = useRef(null);
+  const sessionIdRef = useRef(null);
   const navigate = useNavigate();
   const audioChunksRef = useRef([]);
 
@@ -150,14 +152,17 @@ export default function VoiceBilling() {
       mediaRecorderRef.current.start();
       
       setRealtimeText("");
+      sessionIdRef.current = crypto.randomUUID();
       if (recognitionRef.current) recognitionRef.current.start();
 
+      LogRocket.track('voice_session_started', { session_id: sessionIdRef.current });
       setIsRecording(true);
       setViewState('input');
       setBillPreview(null);
       setBillDetails(null);
     } catch (err) {
       console.error("Error accessing microphone", err);
+      LogRocket.track('L1_mic_error', { error: err.message });
       alert("Microphone access is required to use this feature.");
     }
   };
@@ -187,22 +192,60 @@ export default function VoiceBilling() {
       }
 
       formData.append('preview_only', 'true');
+      formData.append('web_speech_text', realtimeText || '');
+      formData.append('session_id', sessionIdRef.current || '');
 
-      const RAILWAY_API_URL = 'https://web-production-55116.up.railway.app/voice-search/';
+      const RAILWAY_API_URL = `${import.meta.env.VITE_API_BASE_URL || 'https://web-production-55116.up.railway.app'}/voice-search/`;
       
       const response = await fetch(RAILWAY_API_URL, {
         method: 'POST',
         body: formData,
       });
 
-      if (!response.ok) throw new Error(`Server returned ${response.status}`);
+      if (!response.ok) {
+        LogRocket.track('L7_api_error', { status: response.status, session_id: sessionIdRef.current });
+        throw new Error(`Server returned ${response.status}`);
+      }
 
       const data = await response.json();
-      setBillPreview(data.results || []);
-      setBillDetails({ spoken_text: data.spoken_text }); 
+      const results = data.results || [];
+
+      // L2 — Whisper returned nothing
+      if (!data.spoken_text) {
+        LogRocket.track('L2_empty_transcript', { session_id: sessionIdRef.current, web_speech_text: realtimeText });
+      }
+
+      // L3 — LLM extracted no items
+      if (data.spoken_text && (!data.parsed_items || data.parsed_items.length === 0)) {
+        LogRocket.track('L3_no_items_extracted', { session_id: sessionIdRef.current, spoken_text: data.spoken_text });
+      }
+
+      // L4/L5 — per-item match failures
+      const notFound = results.filter(r => r.error);
+      const matched  = results.filter(r => !r.error);
+      if (notFound.length > 0) {
+        LogRocket.track('L4_items_not_found', {
+          session_id: sessionIdRef.current,
+          spoken_text: data.spoken_text,
+          not_found: notFound.map(r => ({ searched_as: r.searched_as, score: r.match_score })),
+        });
+      }
+
+      // Low-confidence matches (above threshold but below 0.75 — worth watching)
+      const lowConf = matched.filter(r => r.match_score < 0.75);
+      if (lowConf.length > 0) {
+        LogRocket.track('L5_low_confidence_match', {
+          session_id: sessionIdRef.current,
+          items: lowConf.map(r => ({ searched_as: r.searched_as, matched_to: r.item_name, score: r.match_score, tier: r.match_tier })),
+        });
+      }
+
+      setBillPreview(results);
+      setBillDetails({ spoken_text: data.spoken_text, session_id: data.session_id });
 
     } catch (error) {
       console.error('Error uploading audio:', error);
+      LogRocket.track('L7_voice_search_failed', { session_id: sessionIdRef.current, error: error.message });
       alert(`Failed to process voice billing: ${error.message}`);
     } finally {
       setIsProcessing(false);
@@ -291,7 +334,7 @@ export default function VoiceBilling() {
 
       const subTotal = validItems.reduce((sum, item) => sum + (item.item_total || 0), 0);
       const finalTotal = Math.max(0, subTotal - discountAmount);
-      const RAILWAY_CHECKOUT_URL = 'https://web-production-55116.up.railway.app/voice-checkout/';
+      const RAILWAY_CHECKOUT_URL = `${import.meta.env.VITE_API_BASE_URL || 'https://web-production-55116.up.railway.app'}/voice-checkout/`;
 
       const payload = {
         user_id: localStorage.getItem('demoUserId'),
@@ -299,6 +342,7 @@ export default function VoiceBilling() {
         discount_amount: discountAmount,
         customer_name: customerName || null,
         is_credit: isCredit,
+        session_id: sessionIdRef.current || null,
         items: sanitizedItems
       };
 
@@ -312,8 +356,16 @@ export default function VoiceBilling() {
 
       if (!response.ok) {
         const errText = await response.text();
+        LogRocket.track('L7_checkout_failed', { session_id: sessionIdRef.current, status: response.status, error: errText });
         throw new Error(`Server returned ${response.status}: ${errText}`);
       }
+
+      LogRocket.track('checkout_completed', {
+        session_id: sessionIdRef.current,
+        total: finalTotal,
+        is_credit: isCredit,
+        item_count: sanitizedItems.length,
+      });
 
       setBillDetails({
         ...billDetails,
@@ -324,12 +376,12 @@ export default function VoiceBilling() {
         customer_name: customerName,
         is_credit: isCredit
       });
-      
+
       // Refresh names list for next runs
       fetchCustomerNames();
       setViewState('success');
       fetchCurrentStock();
-      
+
     } catch (e) {
       alert("Error confirming bill: " + e.message);
     } finally {
