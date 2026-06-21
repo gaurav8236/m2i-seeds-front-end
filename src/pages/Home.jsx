@@ -50,11 +50,7 @@ export default function Home() {
     const load = async () => {
       setLoading(true);
       try {
-        let userId = localStorage.getItem('demoUserId');
-        if (!userId) {
-          const { data: users } = await supabase.from('users').select('id').limit(1);
-          if (users?.length > 0) { userId = users[0].id; localStorage.setItem('demoUserId', userId); }
-        }
+        const userId = localStorage.getItem('demoUserId');
         if (userId) await Promise.all([fetchMonthStats(userId), fetchLowStockCount(userId), fetchRecentBills(userId)]);
       } catch (e) { console.error(e); }
       finally { setLoading(false); }

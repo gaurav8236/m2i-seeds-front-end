@@ -4,6 +4,7 @@ import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import LogRocket from 'logrocket';
 
 export default function VoiceBilling() {
   const [viewState, setViewState] = useState('input'); // input, settlement, success
@@ -27,6 +28,8 @@ export default function VoiceBilling() {
 
   const mediaRecorderRef = useRef(null);
   const recognitionRef = useRef(null);
+  const sessionIdRef = useRef(null);
+  const webSpeechTextRef = useRef('');
   const navigate = useNavigate();
   const audioChunksRef = useRef([]);
 
@@ -93,6 +96,7 @@ export default function VoiceBilling() {
           currentTranscript += event.results[i][0].transcript;
         }
         setRealtimeText(currentTranscript);
+        webSpeechTextRef.current = currentTranscript; // keep ref in sync for logging
       };
       
       recognitionRef.current = recognition;
@@ -149,15 +153,19 @@ export default function VoiceBilling() {
       mediaRecorderRef.current.onstop = handleAudioStop;
       mediaRecorderRef.current.start();
       
+      sessionIdRef.current = crypto.randomUUID();
+      webSpeechTextRef.current = '';
       setRealtimeText("");
       if (recognitionRef.current) recognitionRef.current.start();
 
+      LogRocket.track('voice_session_started', { session_id: sessionIdRef.current });
       setIsRecording(true);
       setViewState('input');
       setBillPreview(null);
       setBillDetails(null);
     } catch (err) {
       console.error("Error accessing microphone", err);
+      LogRocket.track('L1_mic_error', { error: err.message });
       alert("Microphone access is required to use this feature.");
     }
   };
@@ -195,14 +203,53 @@ export default function VoiceBilling() {
         body: formData,
       });
 
-      if (!response.ok) throw new Error(`Server returned ${response.status}`);
+      if (!response.ok) {
+        LogRocket.track('L7_api_error', { session_id: sessionIdRef.current, status: response.status });
+        throw new Error(`Server returned ${response.status}`);
+      }
 
       const data = await response.json();
-      setBillPreview(data.results || []);
-      setBillDetails({ spoken_text: data.spoken_text }); 
+      const results = data.results || [];
+      const webSpeechText = webSpeechTextRef.current;
+
+      // L2 — Whisper returned nothing
+      if (!data.spoken_text) {
+        LogRocket.track('L2_empty_transcript', { session_id: sessionIdRef.current, web_speech_text: webSpeechText });
+      }
+
+      // L3 — LLaMA extracted no items
+      if (data.spoken_text && (!data.parsed_items || data.parsed_items.length === 0)) {
+        LogRocket.track('L3_no_items_extracted', { session_id: sessionIdRef.current, whisper_text: data.spoken_text });
+      }
+
+      // L4 — items not matched
+      const notFound = results.filter(r => r.error);
+      if (notFound.length > 0) {
+        LogRocket.track('L4_items_not_found', {
+          session_id: sessionIdRef.current,
+          not_found: notFound.map(r => r.item_name),
+        });
+      }
+
+      // Write full session to voice_logs (frontend-only, no backend change needed)
+      supabase.from('voice_logs').insert({
+        session_id: sessionIdRef.current,
+        user_id: localStorage.getItem('demoUserId'),
+        web_speech_text: webSpeechText,
+        whisper_text: data.spoken_text,
+        llm_extracted_items: data.parsed_items || [],
+        match_results: results,
+        checkout_completed: false,
+      }).then(({ error: logErr }) => {
+        if (logErr) console.warn('[voice_logs]', logErr.message);
+      });
+
+      setBillPreview(results);
+      setBillDetails({ spoken_text: data.spoken_text });
 
     } catch (error) {
       console.error('Error uploading audio:', error);
+      LogRocket.track('L7_voice_search_failed', { session_id: sessionIdRef.current, error: error.message });
       alert(`Failed to process voice billing: ${error.message}`);
     } finally {
       setIsProcessing(false);
@@ -312,8 +359,26 @@ export default function VoiceBilling() {
 
       if (!response.ok) {
         const errText = await response.text();
+        LogRocket.track('L7_checkout_failed', { session_id: sessionIdRef.current, status: response.status });
         throw new Error(`Server returned ${response.status}: ${errText}`);
       }
+
+      // Mark session as completed in voice_logs
+      if (sessionIdRef.current) {
+        supabase.from('voice_logs')
+          .update({ checkout_completed: true })
+          .eq('session_id', sessionIdRef.current)
+          .then(({ error: logErr }) => {
+            if (logErr) console.warn('[voice_logs] update:', logErr.message);
+          });
+      }
+
+      LogRocket.track('checkout_completed', {
+        session_id: sessionIdRef.current,
+        total: finalTotal,
+        is_credit: isCredit,
+        item_count: sanitizedItems.length,
+      });
 
       setBillDetails({
         ...billDetails,
@@ -324,12 +389,12 @@ export default function VoiceBilling() {
         customer_name: customerName,
         is_credit: isCredit
       });
-      
+
       // Refresh names list for next runs
       fetchCustomerNames();
       setViewState('success');
       fetchCurrentStock();
-      
+
     } catch (e) {
       alert("Error confirming bill: " + e.message);
     } finally {
