@@ -1,8 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../supabaseClient';
-import { Trash2, Plus } from 'lucide-react';
+import { Trash2, Plus, Package, Search, FileText, Check } from 'lucide-react';
 
 export default function InventoryForm() {
+  // Navigation / Tabs State
+  const [activeTab, setActiveTab] = useState('add'); // 'add' or 'list'
+
+  // Form States
   const [itemName, setItemName] = useState('');
   const [category, setCategory] = useState('');
   const [unit, setUnit] = useState('');
@@ -12,10 +16,18 @@ export default function InventoryForm() {
   const [aliases, setAliases] = useState([]);
   const [newAlias, setNewAlias] = useState('');
 
-  const [suggestions, setSuggestions] = useState([]);
-  const [isSearching, setIsSearching] = useState(false);
+  // Autocomplete suggestions States
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [filteredSuggestions, setFilteredSuggestions] = useState([]);
+  const autocompleteRef = useRef(null);
+
+  // Stock list and Previews
   const [stockList, setStockList] = useState([]);
   const [previewItems, setPreviewItems] = useState([]);
+
+  // Search and Filter States for Stock List Tab
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterStatus, setFilterStatus] = useState('all'); // 'all' or 'low'
 
   const fetchCurrentStock = async () => {
     try {
@@ -58,10 +70,8 @@ export default function InventoryForm() {
         return;
       }
 
-      if (data && data.length > 0) {
+      if (data) {
         setStockList(data);
-      } else if (data && data.length === 0) {
-        console.log("No stock items found for this user.");
       }
     } catch (e) {
       console.error('Error fetching stock:', e);
@@ -70,7 +80,21 @@ export default function InventoryForm() {
   };
 
   useEffect(() => {
-    fetchCurrentStock();
+    const timer = setTimeout(() => {
+      fetchCurrentStock();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Handle clicking outside autocomplete to close dropdown
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (autocompleteRef.current && !autocompleteRef.current.contains(event.target)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   const uniqueCategories = [...new Set(stockList.map(s => s.master_inventory?.category).filter(Boolean))];
@@ -80,21 +104,50 @@ export default function InventoryForm() {
     const val = e.target.value;
     setItemName(val);
     
+    if (val.trim() === '') {
+      setFilteredSuggestions([]);
+      setShowSuggestions(false);
+    } else {
+      // Filter list of inventory items matching characters typed
+      const matches = stockList.filter(s => 
+        s.master_inventory?.item_name?.toLowerCase().includes(val.toLowerCase())
+      );
+      setFilteredSuggestions(matches);
+      setShowSuggestions(true);
+    }
+
     const existing = stockList.find(s => s.master_inventory?.item_name === val);
     if (existing) {
-      setCategory(existing.master_inventory?.category || '');
-      setUnit(existing.master_inventory?.unit || '');
-      setPrice(existing.selling_price || '');
-      setCurrentStock(existing.current_stock || '');
-      setLowStockLimit(existing.low_stock_limit || 10);
-      setAliases(existing.aliases || []);
+      selectExistingItem(existing);
     }
+  };
+
+  const selectExistingItem = (existing) => {
+    setItemName(existing.master_inventory?.item_name || '');
+    setCategory(existing.master_inventory?.category || '');
+    setUnit(existing.master_inventory?.unit || '');
+    setPrice(existing.selling_price || '');
+    setCurrentStock(existing.current_stock || '');
+    setLowStockLimit(existing.low_stock_limit || 10);
+    setAliases(existing.aliases || []);
+    setShowSuggestions(false);
   };
 
   const handleAddAlias = (e) => {
     if (e.key === 'Enter' && newAlias.trim()) {
       e.preventDefault();
-      setAliases([...aliases, newAlias.trim()]);
+      if (!aliases.includes(newAlias.trim())) {
+        setAliases([...aliases, newAlias.trim()]);
+      }
+      setNewAlias('');
+    }
+  };
+
+  const handleAddAliasManual = () => {
+    if (newAlias.trim()) {
+      if (!aliases.includes(newAlias.trim())) {
+        setAliases([...aliases, newAlias.trim()]);
+      }
       setNewAlias('');
     }
   };
@@ -110,8 +163,8 @@ export default function InventoryForm() {
     }
     const newItem = {
       item_name: itemName.trim(),
-      category,
-      unit,
+      category: category.trim(),
+      unit: unit.trim(),
       cost_price: 0.0,
       selling_price: parseFloat(price) || 0,
       current_stock: parseFloat(currentStock) || 0,
@@ -158,9 +211,8 @@ export default function InventoryForm() {
         return;
       }
 
-      // Submit the entire JSON array to our new bulk function
-      // NOTE: Parameter is p_items which perfectly matches what Flutter will use!
-      const { data, error } = await supabase.rpc('upsert_inventory_item', {
+      // Submit the entire JSON array to our bulk function
+      const { error } = await supabase.rpc('upsert_inventory_item', {
         p_user_id: userId,
         p_items: previewItems
       });
@@ -169,221 +221,471 @@ export default function InventoryForm() {
 
       alert("सभी आइटम सफलतापूर्वक स्टॉक में जोड़ दिए गए!");
       setPreviewItems([]); // Clear preview
-      fetchCurrentStock(); // Refresh main table
+      fetchCurrentStock(); // Refresh main list
+      setActiveTab('list'); // Switch back to see list after save
     } catch (error) {
       console.error(error);
       alert(`आइटम सहेजने में त्रुटि: ${error.message || JSON.stringify(error)}`);
     }
   };
 
+  // Filter existing inventory list
+  const filteredStockList = stockList.filter(stock => {
+    const name = stock.master_inventory?.item_name || '';
+    const cat = stock.master_inventory?.category || '';
+    const matchesSearch = name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                          cat.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    const isLow = stock.current_stock <= stock.low_stock_limit;
+    const matchesStatus = filterStatus === 'all' || (filterStatus === 'low' && isLow);
+    
+    return matchesSearch && matchesStatus;
+  });
+
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#f0f4f8', paddingBottom: '100px' }}>
+    <div style={{ minHeight: '100vh', backgroundColor: 'var(--bg)', paddingBottom: '100px' }}>
       {/* Header */}
-      <div style={{ backgroundColor: 'var(--primary-blue)', padding: '1.5rem 1rem', borderBottomLeftRadius: '16px', borderBottomRightRadius: '16px', color: 'white', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <Plus size={24} color="white" />
+      <div style={{
+        background: 'var(--primary-gradient)',
+        padding: '1.25rem 1rem 1.5rem',
+        borderBottomLeftRadius: '20px',
+        borderBottomRightRadius: '20px',
+        color: 'white',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.875rem',
+        boxShadow: '0 4px 20px rgba(13,71,161,0.25)',
+      }}>
+        <div style={{ width: 40, height: 40, background: 'rgba(255,255,255,0.18)', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(255,255,255,0.3)', flexShrink: 0 }}>
+          <Package size={22} color="white" />
+        </div>
         <div>
-          <h1 style={{ margin: 0, fontSize: '1.2rem' }}>स्टॉक जोड़ें / अपडेट करें</h1>
-          <p style={{ margin: 0, opacity: 0.8, fontSize: '0.85rem', marginTop: '2px' }}>Add or Update Inventory</p>
+          <h1 style={{ margin: 0, fontSize: '1.25rem', color: 'white', fontWeight: 700, letterSpacing: '-0.01em' }}>इन्वेंट्री प्रबंधन</h1>
+          <p style={{ margin: 0, color: 'rgba(255,255,255,0.88)', fontSize: '0.78rem', marginTop: '2px' }}>Inventory Management</p>
         </div>
       </div>
 
       <div style={{ padding: '1rem' }}>
-        <form onSubmit={(e) => { e.preventDefault(); handleAddToPreview(); }} style={{ backgroundColor: 'white', padding: '1.5rem', borderRadius: '12px', boxShadow: 'var(--shadow-sm)', border: '1px solid #e5e7eb' }}>
-          
-          <div className="form-group">
-            <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>आइटम का नाम (Item Name)</label>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <input 
-                type="text" 
-                className="input-field" 
-                value={itemName}
-                onChange={handleItemNameChange}
-                placeholder="उदा. Basmati Rice"
-                list="inventory-list"
-                required
-              />
-              <datalist id="inventory-list">
-                {stockList.map(stock => (
-                  <option key={stock.id} value={stock.master_inventory?.item_name} />
-                ))}
-              </datalist>
-              <button type="button" className="btn btn-outline" style={{ padding: '0.75rem', borderColor: '#e5e7eb' }} onClick={() => { setItemName(''); setCategory(''); setUnit(''); setPrice(''); setCurrentStock(''); setAliases([]); setLowStockLimit(10); }}>
-                <Trash2 size={20} color="var(--danger)" />
-              </button>
-            </div>
-          </div>
+        
+        {/* Segmented Control / Tabs */}
+        <div className="segmented-control">
+          <button 
+            className={`segment-btn ${activeTab === 'add' ? 'active' : ''}`}
+            onClick={() => setActiveTab('add')}
+          >
+            <Plus size={18} /> सामान जोड़ें
+          </button>
+          <button 
+            className={`segment-btn ${activeTab === 'list' ? 'active' : ''}`}
+            onClick={() => setActiveTab('list')}
+          >
+            <Package size={18} /> स्टॉक सूची
+          </button>
+        </div>
 
-          <div className="form-group grid-2">
-            <div>
-              <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>श्रेणी (Category)</label>
-              <input 
-                type="text"
-                list="category-list"
-                className="input-field" 
-                value={category} 
-                onChange={e => setCategory(e.target.value)}
-                placeholder="उदा. अनाज"
-                required
-              />
-              <datalist id="category-list">
-                {uniqueCategories.map(cat => <option key={cat} value={cat} />)}
-              </datalist>
-            </div>
-            <div>
-              <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>इकाई (Unit)</label>
-              <input 
-                type="text"
-                list="unit-list"
-                className="input-field" 
-                value={unit} 
-                onChange={e => setUnit(e.target.value)}
-                placeholder="उदा. किलोग्राम"
-                required
-              />
-              <datalist id="unit-list">
-                {uniqueUnits.map(u => <option key={u} value={u} />)}
-              </datalist>
-            </div>
-          </div>
+        {/* ----------------- TAB 1: ADD / UPDATE STOCK ----------------- */}
+        {activeTab === 'add' && (
+          <div className="animate-fade-in">
+            <form 
+              onSubmit={(e) => { e.preventDefault(); handleAddToPreview(); }} 
+              style={{ 
+                backgroundColor: 'white', 
+                padding: '1.5rem', 
+                borderRadius: '16px', 
+                boxShadow: 'var(--shadow-sm)', 
+                border: '1px solid #e2e8f0' 
+              }}
+            >
+              
+              {/* Custom Search-as-you-type autocomplete input */}
+              <div className="form-group" ref={autocompleteRef}>
+                <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>सामान का नाम</label>
+                <div style={{ display: 'flex', gap: '0.5rem', position: 'relative' }} className="autocomplete-wrapper">
+                  <input 
+                    type="text" 
+                    className="input-field" 
+                    value={itemName}
+                    onChange={handleItemNameChange}
+                    placeholder="उदा. Basmati Rice"
+                    required
+                    style={{ flexGrow: 1 }}
+                  />
+                  {showSuggestions && filteredSuggestions.length > 0 && (
+                    <div className="autocomplete-dropdown">
+                      {filteredSuggestions.map((stock) => (
+                        <div 
+                          key={stock.id} 
+                          className="autocomplete-item"
+                          onClick={() => selectExistingItem(stock)}
+                        >
+                          <span style={{ fontWeight: 600 }}>{stock.master_inventory?.item_name}</span>
+                          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            {stock.master_inventory?.category} | ₹{stock.selling_price}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <button 
+                    type="button" 
+                    className="btn btn-outline" 
+                    style={{ padding: '0.75rem', borderColor: '#e2e8f0', borderRadius: '8px' }} 
+                    onClick={() => { 
+                      setItemName(''); 
+                      setCategory(''); 
+                      setUnit(''); 
+                      setPrice(''); 
+                      setCurrentStock(''); 
+                      setAliases([]); 
+                      setLowStockLimit(10); 
+                    }}
+                    title="Form Reset"
+                  >
+                    <Trash2 size={20} color="var(--danger)" />
+                  </button>
+                </div>
+              </div>
 
-          <div className="form-group grid-2">
-            <div>
-              <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>कीमत (Price)</label>
-              <input 
-                type="number" 
-                className="input-field" 
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                placeholder="₹"
-                required
-              />
-            </div>
-            <div>
-              <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>स्टॉक (Current Stock)</label>
-              <input 
-                type="number" 
-                className="input-field" 
-                value={currentStock}
-                onChange={(e) => setCurrentStock(e.target.value)}
-                placeholder="0"
-                required
-              />
-            </div>
-          </div>
+              {/* Grid for Category and Unit */}
+              <div className="form-group grid-2">
+                <div>
+                  <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>श्रेणी</label>
+                  <input 
+                    type="text"
+                    list="category-list"
+                    className="input-field" 
+                    value={category} 
+                    onChange={e => setCategory(e.target.value)}
+                    placeholder="उदा. अनाज"
+                    required
+                  />
+                  <datalist id="category-list">
+                    {uniqueCategories.map(cat => <option key={cat} value={cat} />)}
+                  </datalist>
+                </div>
+                <div>
+                  <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>इकाई</label>
+                  <input 
+                    type="text"
+                    list="unit-list"
+                    className="input-field" 
+                    value={unit} 
+                    onChange={e => setUnit(e.target.value)}
+                    placeholder="उदा. किलोग्राम"
+                    required
+                  />
+                  <datalist id="unit-list">
+                    {uniqueUnits.map(u => <option key={u} value={u} />)}
+                  </datalist>
+                </div>
+              </div>
 
-          <div className="form-group">
-            <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>उपनाम (Aliases)</label>
-            <input 
-              type="text" 
-              className="input-field" 
-              placeholder="बोलने के अन्य नाम (type and hit enter)"
-              value={newAlias}
-              onChange={(e) => setNewAlias(e.target.value)}
-              onKeyDown={handleAddAlias}
-            />
-            {aliases.length > 0 && (
-              <div className="chip-container" style={{ marginTop: '0.5rem' }}>
-                {aliases.map((alias, index) => (
-                  <span key={index} className="chip" style={{ backgroundColor: '#f3f4f6', border: '1px solid #e5e7eb', color: 'var(--text-dark)' }}>
-                    {alias}
-                    <button type="button" onClick={() => handleRemoveAlias(index)} style={{ color: 'var(--text-muted)' }}>×</button>
+              {/* Grid for Price and Current Stock */}
+              <div className="form-group grid-2">
+                <div>
+                  <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>बिक्री कीमत (₹)</label>
+                  <input 
+                    type="number" 
+                    className="input-field" 
+                    value={price}
+                    onChange={(e) => setPrice(e.target.value)}
+                    placeholder="₹"
+                    required
+                    min="0"
+                    step="any"
+                  />
+                </div>
+                <div>
+                  <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>वर्तमान स्टॉक</label>
+                  <input 
+                    type="number" 
+                    className="input-field" 
+                    value={currentStock}
+                    onChange={(e) => setCurrentStock(e.target.value)}
+                    placeholder="0"
+                    required
+                    min="0"
+                    step="any"
+                  />
+                </div>
+              </div>
+
+              {/* Alias input with a explicit Add '+' button */}
+              <div className="form-group">
+                <label style={{ color: 'var(--text-dark)', fontWeight: 'bold' }}>बोलने के नाम (Voice Aliases)</label>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <input 
+                    type="text" 
+                    className="input-field" 
+                    placeholder="उदा. चावल, बासमती"
+                    value={newAlias}
+                    onChange={(e) => setNewAlias(e.target.value)}
+                    onKeyDown={handleAddAlias}
+                  />
+                  <button 
+                    type="button" 
+                    className="btn btn-outline" 
+                    onClick={handleAddAliasManual}
+                    style={{ borderColor: 'var(--primary-blue)', color: 'var(--primary-blue)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0.75rem' }}
+                  >
+                    <Plus size={20} />
+                  </button>
+                </div>
+                {aliases.length > 0 && (
+                  <div className="chip-container">
+                    {aliases.map((alias, index) => (
+                      <span key={index} className="chip animate-fade-in">
+                        {alias}
+                        <button type="button" onClick={() => handleRemoveAlias(index)}>×</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Low Stock Limit visual selector */}
+              <div className="form-group">
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <label style={{ margin: 0, color: 'var(--text-dark)', fontWeight: 'bold' }}>कम स्टॉक चेतावनी</label>
+                  <span style={{ 
+                    color: 'var(--primary-blue)', 
+                    fontWeight: 'bold', 
+                    backgroundColor: '#eff6ff', 
+                    padding: '2px 10px', 
+                    borderRadius: '12px', 
+                    fontSize: '0.85rem',
+                    border: '1px solid #dbeafe'
+                  }}>
+                    {lowStockLimit} {unit || 'units'}
                   </span>
-                ))}
+                </div>
+                
+                <div className="slider-container-fancy">
+                  {/* Color slider progress track */}
+                  <div style={{
+                    height: '6px',
+                    borderRadius: '3px',
+                    width: '100%',
+                    background: 'linear-gradient(to right, #ef4444 0%, #f59e0b 40%, #10b981 100%)',
+                    position: 'relative',
+                    marginBottom: '8px'
+                  }}>
+                    {/* Visual Slider position mark */}
+                    <div style={{
+                      position: 'absolute',
+                      left: `${Math.min(100, Math.max(0, lowStockLimit))}%`,
+                      transform: 'translateX(-50%)',
+                      width: '12px',
+                      height: '12px',
+                      borderRadius: '50%',
+                      backgroundColor: 'var(--primary-blue)',
+                      border: '2px solid white',
+                      top: '-3px',
+                      boxShadow: 'var(--shadow-sm)'
+                    }} />
+                  </div>
+                  <input 
+                    type="range" 
+                    min="0" 
+                    max="100" 
+                    value={lowStockLimit}
+                    onChange={(e) => setLowStockLimit(parseInt(e.target.value) || 0)}
+                    style={{ width: '100%', cursor: 'pointer', accentColor: 'var(--primary-blue)' }}
+                  />
+                </div>
+              </div>
+
+              <button 
+                type="button" 
+                className="btn btn-primary" 
+                onClick={handleAddToPreview} 
+                style={{ width: '100%', padding: '1rem', marginTop: '0.5rem', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                <Plus size={20} style={{ marginRight: '8px' }} />
+                समीक्षा सूची में जोड़ें
+              </button>
+            </form>
+
+            {/* MODERN CARD-BASED PREVIEW LIST */}
+            {previewItems.length > 0 && (
+              <div 
+                style={{ 
+                  marginTop: '2rem', 
+                  padding: '1.2rem', 
+                  border: '2px dashed var(--primary-blue)', 
+                  borderRadius: '16px',
+                  backgroundColor: '#f8fafc'
+                }} 
+                className="animate-fade-in"
+              >
+                <h3 style={{ 
+                  marginTop: 0, 
+                  color: 'var(--primary-blue)', 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '8px', 
+                  fontSize: '1.1rem',
+                  marginBottom: '1rem'
+                }}>
+                  <FileText size={20} /> समीक्षा सूची ({previewItems.length})
+                </h3>
+
+                <div className="cards-list">
+                  {previewItems.map((item, idx) => (
+                    <div key={idx} className="product-card in-stock animate-fade-in" style={{ borderColor: 'var(--primary-blue)', borderWidth: '1px' }}>
+                      <div className="card-header">
+                        <div>
+                          <div className="card-title">{item.item_name}</div>
+                          <span className="card-category">{item.category || 'बिना श्रेणी'}</span>
+                        </div>
+                        <button 
+                          type="button" 
+                          onClick={() => handleRemoveFromPreview(idx)} 
+                          style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '4px' }}
+                          title="Draft Remove"
+                        >
+                          <Trash2 size={18} color="var(--danger)" />
+                        </button>
+                      </div>
+                      
+                      <div className="card-metrics-grid">
+                        <div className="metric-cell">
+                          <div className="metric-label">बेचने की कीमत</div>
+                          <div className="metric-value">₹{item.selling_price}</div>
+                        </div>
+                        <div className="metric-cell">
+                          <div className="metric-label">नया स्टॉक</div>
+                          <div className="metric-value">{item.current_stock} {item.unit || 'units'}</div>
+                        </div>
+                      </div>
+
+                      {item.aliases && item.aliases.length > 0 && (
+                        <div style={{ marginTop: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid #f1f5f9' }}>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', marginBottom: '4px' }}>उपनाम (Aliases)</div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                            {item.aliases.map((alias, aIdx) => (
+                              <span key={aIdx} style={{ fontSize: '0.75rem', backgroundColor: '#f1f5f9', padding: '2px 8px', borderRadius: '12px', color: 'var(--text-dark)' }}>
+                                {alias}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <button 
+                  type="button" 
+                  onClick={handleSubmitAll} 
+                  className="btn btn-primary" 
+                  style={{ width: '100%', backgroundColor: 'var(--success)', marginTop: '1.2rem', padding: '1rem', borderRadius: '10px' }}
+                >
+                  <Check size={20} style={{ marginRight: '8px' }} />
+                  सभी को स्टॉक में जोड़ें 
+                </button>
               </div>
             )}
           </div>
+        )}
 
-          <div className="form-group" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <label style={{ margin: 0, color: 'var(--text-dark)', fontWeight: 'bold' }}>कम स्टॉक अलर्ट (Low Stock Alert)</label>
-            <span style={{ color: 'var(--primary-blue)', fontWeight: 'bold', backgroundColor: '#eff6ff', padding: '2px 8px', borderRadius: '12px', fontSize: '0.85rem' }}>
-              {lowStockLimit} {unit}
-            </span>
+        {/* ----------------- TAB 2: SEARCHABLE STOCK LIST ----------------- */}
+        {activeTab === 'list' && (
+          <div className="animate-fade-in">
+            {/* Search and Filter card */}
+            <div className="search-filter-section">
+              <div className="search-input-container">
+                <Search className="search-icon-left" size={18} />
+                <input 
+                  type="text" 
+                  className="search-field"
+                  placeholder="आइटम का नाम या श्रेणी खोजें..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                />
+              </div>
+              <div className="filter-chips-wrapper">
+                <button 
+                  className={`filter-chip-btn ${filterStatus === 'all' ? 'active' : ''}`}
+                  onClick={() => setFilterStatus('all')}
+                >
+                  सभी सामान ({stockList.length})
+                </button>
+                <button 
+                  className={`filter-chip-btn ${filterStatus === 'low' ? 'active' : ''}`}
+                  onClick={() => setFilterStatus('low')}
+                >
+                  कम स्टॉक ({stockList.filter(s => s.current_stock <= s.low_stock_limit).length})
+                </button>
+              </div>
+            </div>
+
+            {/* List of Inventory Cards */}
+            <div className="cards-list">
+              {filteredStockList.length === 0 ? (
+                <div style={{ 
+                  textAlign: 'center', 
+                  padding: '3rem 1.5rem', 
+                  color: 'var(--text-muted)', 
+                  backgroundColor: 'white', 
+                  borderRadius: '16px', 
+                  border: '1px solid var(--border-color)',
+                  boxShadow: 'var(--shadow-sm)'
+                }}>
+                  <Package size={42} style={{ opacity: 0.3, marginBottom: '0.75rem', margin: '0 auto' }} />
+                  <p style={{ fontWeight: 600 }}>कोई स्टॉक आइटम नहीं मिला।</p>
+                  <p style={{ fontSize: '0.8rem', marginTop: '2px' }}>आइटम जोड़ने के लिए "स्टॉक जोड़ें" टैब का उपयोग करें</p>
+                </div>
+              ) : (
+                filteredStockList.map(stock => {
+                  const isLow = stock.current_stock <= stock.low_stock_limit;
+                  return (
+                    <div
+                      key={stock.id}
+                      style={{ background: 'white', borderRadius: '20px', border: `1px solid ${isLow ? '#fecaca' : '#f1f5f9'}`, padding: '1rem 1.125rem', boxShadow: '0 2px 12px rgba(0,0,0,0.07)', marginBottom: '0.75rem' }}
+                    >
+                      {/* Top: name + category + low-stock flag */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: '1rem', color: '#0f172a', lineHeight: 1.2 }}>{stock.master_inventory?.item_name}</div>
+                          <span style={{ fontSize: '0.68rem', color: '#64748b', background: '#f8fafc', padding: '2px 9px', borderRadius: '20px', display: 'inline-block', marginTop: '5px', fontWeight: 500, border: '1px solid #e2e8f0' }}>
+                            {stock.master_inventory?.category || 'सामान्य'}
+                          </span>
+                        </div>
+                        {isLow && (
+                          <span style={{ fontSize: '0.68rem', fontWeight: 700, padding: '3px 9px', borderRadius: '20px', background: '#fef2f2', color: '#dc2626', flexShrink: 0, border: '1px solid #fecaca' }}>
+                            ⚠ कम स्टॉक
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Price as hero number, stock inline */}
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', marginTop: '0.75rem' }}>
+                        <span style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.03em', lineHeight: 1 }}>₹{stock.selling_price}</span>
+                        <span style={{ fontSize: '0.82rem', color: '#cbd5e1' }}>·</span>
+                        <span style={{ fontSize: '0.9rem', fontWeight: 600, color: isLow ? '#dc2626' : '#475569' }}>
+                          {stock.current_stock} {stock.master_inventory?.unit}
+                        </span>
+                      </div>
+
+                      {/* Aliases as subtle pills */}
+                      {stock.aliases && stock.aliases.length > 0 && (
+                        <div style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                          {stock.aliases.map((alias, aIdx) => (
+                            <span key={aIdx} style={{ fontSize: '0.7rem', background: '#f8fafc', color: '#64748b', padding: '2px 9px', borderRadius: '20px', fontWeight: 500, border: '1px solid #e2e8f0' }}>
+                              {alias}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
-          <div className="form-group">
-            <input 
-              type="range" 
-              min="0" max="100" 
-              value={lowStockLimit}
-              onChange={(e) => setLowStockLimit(e.target.value)}
-              style={{ width: '100%', cursor: 'pointer', accentColor: 'var(--primary-blue)' }}
-            />
-          </div>
+        )}
 
-          <button type="button" className="btn btn-primary" onClick={handleAddToPreview} style={{ width: '100%', padding: '1rem', marginTop: '1rem', borderRadius: '8px' }}>
-            <Plus size={20} style={{ marginRight: '8px' }} />
-            समीक्षा में जोड़ें (Add to Preview)
-          </button>
-        </form>
-
-      {/* PREVIEW TABLE */}
-      {previewItems.length > 0 && (
-        <div style={{ marginTop: '2rem', padding: '1rem', border: '2px dashed var(--primary-blue)', borderRadius: '12px' }}>
-          <h3 style={{ marginTop: 0, color: 'var(--primary-blue)' }}>समीक्षा (Preview)</h3>
-          <table className="stock-table" style={{ marginBottom: '1rem' }}>
-            <thead>
-              <tr>
-                <th>आइटम</th>
-                <th>श्रेणी</th>
-                <th>कीमत</th>
-                <th>स्टॉक</th>
-                <th>स्थिति</th>
-              </tr>
-            </thead>
-            <tbody>
-              {previewItems.map((item, idx) => (
-                <tr key={idx} style={{ backgroundColor: '#f0f9ff' }}>
-                  <td style={{ fontWeight: 600 }}>{item.item_name}</td>
-                  <td>{item.category}</td>
-                  <td>₹{item.selling_price}</td>
-                  <td>{item.current_stock} {item.unit}</td>
-                  <td>
-                    <button type="button" onClick={() => handleRemoveFromPreview(idx)} style={{ color: 'red', border: 'none', background: 'none', cursor: 'pointer' }}>
-                      <Trash2 size={18} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <button type="button" onClick={handleSubmitAll} className="btn btn-primary" style={{ width: '100%', backgroundColor: 'var(--success)' }}>
-            समीक्षा करे (Submit {previewItems.length} Items to Database)
-          </button>
-        </div>
-      )}
-
-      {stockList.length > 0 && (
-        <div className="stock-table-container">
-          <table className="stock-table">
-            <thead>
-              <tr>
-                <th>आइटम</th>
-                <th>श्रेणी</th>
-                <th>कीमत</th>
-                <th>स्टॉक</th>
-                <th>स्थिति</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stockList.map(stock => {
-                const isLow = stock.current_stock <= stock.low_stock_limit;
-                return (
-                  <tr key={stock.id}>
-                    <td style={{ fontWeight: 600 }}>{stock.master_inventory?.item_name}</td>
-                    <td>{stock.master_inventory?.category}</td>
-                    <td>₹{stock.selling_price}</td>
-                    <td>{stock.current_stock} {stock.master_inventory?.unit}</td>
-                    <td>
-                      <span className={`status-badge ${isLow ? 'status-low' : 'status-ok'}`}>
-                        {isLow ? 'Low Stock' : 'In Stock'}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
       </div>
     </div>
   );

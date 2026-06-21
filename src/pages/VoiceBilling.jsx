@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Mic, FileText, CheckCircle, ArrowLeft, Printer, History, Trash2, Plus } from 'lucide-react';
+import { Mic, FileText, CheckCircle, ArrowLeft, Printer, History, Trash2, Plus, Package } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import jsPDF from 'jspdf';
@@ -19,9 +19,16 @@ export default function VoiceBilling() {
   const [isCredit, setIsCredit] = useState(false);
   const [customerName, setCustomerName] = useState('');
 
+  // Autocomplete customer names states
+  const [customerNamesList, setCustomerNamesList] = useState([]);
+  const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
+  const [filteredCustomerSuggestions, setFilteredCustomerSuggestions] = useState([]);
+  const customerAutocompleteRef = useRef(null);
+
   const mediaRecorderRef = useRef(null);
   const recognitionRef = useRef(null);
   const navigate = useNavigate();
+  const audioChunksRef = useRef([]);
 
   const fetchCurrentStock = async () => {
     try {
@@ -35,7 +42,7 @@ export default function VoiceBilling() {
       }
       if (!userId) return;
 
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('user_stock')
         .select(`id, current_stock, selling_price, low_stock_limit, master_inventory (item_name, category, unit)`)
         .eq('user_id', userId);
@@ -46,8 +53,33 @@ export default function VoiceBilling() {
     }
   };
 
+  const fetchCustomerNames = async () => {
+    try {
+      const userId = localStorage.getItem('demoUserId');
+      if (!userId) return;
+
+      const { data, error } = await supabase
+        .from('past_bills')
+        .select('customer_name')
+        .eq('user_id', userId)
+        .not('customer_name', 'is', null);
+
+      if (error) throw error;
+      if (data) {
+        // Find unique customer names
+        const names = [...new Set(data.map(b => b.customer_name?.trim()).filter(Boolean))];
+        setCustomerNamesList(names);
+      }
+    } catch (e) {
+      console.error('Error fetching customer names:', e);
+    }
+  };
+
   useEffect(() => {
-    fetchCurrentStock();
+    const timer = setTimeout(() => {
+      fetchCurrentStock();
+      fetchCustomerNames();
+    }, 0);
     
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognition) {
@@ -65,8 +97,42 @@ export default function VoiceBilling() {
       
       recognitionRef.current = recognition;
     }
+
+    return () => {
+      clearTimeout(timer);
+    };
   }, []);
-  const audioChunksRef = useRef([]);
+
+  // Listen to clicking outside customer suggestions dropdown
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (customerAutocompleteRef.current && !customerAutocompleteRef.current.contains(event.target)) {
+        setShowCustomerSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleCustomerNameChange = (e) => {
+    const val = e.target.value;
+    setCustomerName(val);
+    if (val.trim() === '') {
+      setFilteredCustomerSuggestions([]);
+      setShowCustomerSuggestions(false);
+    } else {
+      const matches = customerNamesList.filter(name => 
+        name.toLowerCase().includes(val.toLowerCase())
+      );
+      setFilteredCustomerSuggestions(matches);
+      setShowCustomerSuggestions(true);
+    }
+  };
+
+  const selectCustomer = (name) => {
+    setCustomerName(name);
+    setShowCustomerSuggestions(false);
+  };
 
   const startRecording = async () => {
     try {
@@ -259,6 +325,8 @@ export default function VoiceBilling() {
         is_credit: isCredit
       });
       
+      // Refresh names list for next runs
+      fetchCustomerNames();
       setViewState('success');
       fetchCurrentStock();
       
@@ -273,14 +341,12 @@ export default function VoiceBilling() {
     const input = document.getElementById('receipt-download-container');
     if (!input) return;
 
-    // Show it temporarily to capture
     input.style.display = 'block';
 
     try {
       const canvas = await html2canvas(input, { scale: 2 });
       const imgData = canvas.toDataURL('image/png');
       
-      // Calculate dynamic height for thermal printer style (80mm width)
       const pdf = new jsPDF({
         orientation: 'portrait',
         unit: 'mm',
@@ -296,7 +362,6 @@ export default function VoiceBilling() {
       console.error('Error generating PDF:', e);
       alert('Failed to generate PDF');
     } finally {
-      // Hide it again
       input.style.display = 'none';
     }
   };
@@ -310,95 +375,121 @@ export default function VoiceBilling() {
   );
 
   return (
-    <div style={{ position: 'relative', minHeight: '100vh', backgroundColor: '#f0f4f8' }}>
-      
-      {/* ---------------- VIEW STATE 1: NEW BILL (Input & Preview) ---------------- */}
+    <div style={{ position: 'relative', minHeight: '100vh', backgroundColor: 'var(--bg)' }}>
+
+      {/* ═══════════════════════════════════════
+          VIEW 1 — BILLING INPUT
+      ═══════════════════════════════════════ */}
       {viewState === 'input' && (
         <>
-          <div style={{ backgroundColor: '#fff', padding: '1rem', borderBottom: '1px solid #e5e7eb' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <div style={{ width: '24px', height: '3px', backgroundColor: '#333', position: 'relative' }}>
-                  <div style={{ width: '24px', height: '3px', backgroundColor: '#333', position: 'absolute', top: '-6px' }} />
-                  <div style={{ width: '24px', height: '3px', backgroundColor: '#333', position: 'absolute', top: '6px' }} />
+          {/* Header */}
+          <div style={{ background: 'var(--primary-gradient)', padding: '1rem 1rem 1.25rem', borderBottomLeftRadius: '20px', borderBottomRightRadius: '20px', boxShadow: '0 4px 16px rgba(13,71,161,0.25)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.875rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ width: 32, height: 32, background: 'rgba(255,255,255,0.2)', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>
+                  <Mic size={17} color="white" />
                 </div>
-                <span style={{ fontWeight: 'bold', color: 'var(--primary-blue)' }}>दुकानदार सहायक</span>
+                <div>
+                  <div style={{ color: 'white', fontWeight: 700, fontSize: '1rem', letterSpacing: '-0.01em' }}>SmartDukan</div>
+                  <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: '0.65rem' }}>Voice Billing</div>
+                </div>
               </div>
-              <button onClick={() => navigate('/past-bills')} className="btn btn-outline" style={{ padding: '0.4rem 0.8rem', borderRadius: '20px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <History size={16} /> इतिहास (History)
+              <button onClick={() => navigate('/past-bills')} style={{ background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.3)', color: 'white', borderRadius: '20px', padding: '5px 12px', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <History size={14} /> इतिहास
               </button>
             </div>
-            
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#e6f4ea', padding: '0.75rem 1rem', borderRadius: '8px' }}>
-              <span style={{ fontWeight: '600', color: '#1e8e3e' }}>कुल राशि (Total):</span>
-              <span style={{ fontWeight: 'bold', fontSize: '1.2rem', color: '#1e8e3e' }}>
-                ₹{calculateGrandTotal().toFixed(2)} 
-                {discountAmount > 0 && <span style={{ fontSize: '0.8rem', color: '#14532d', marginLeft: '8px' }}>(₹{discountAmount} छूट)</span>}
-              </span>
+
+            {/* Total pill */}
+            <div style={{ background: 'rgba(255,255,255,0.12)', borderRadius: '12px', padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid rgba(255,255,255,0.2)' }}>
+              <span style={{ color: 'rgba(255,255,255,0.85)', fontSize: '0.8rem', fontWeight: 600 }}>कुल राशि</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {discountAmount > 0 && <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.85)', textDecoration: 'line-through' }}>₹{calculateSubTotal().toFixed(0)}</span>}
+                <span style={{ color: 'white', fontWeight: 800, fontSize: '1.3rem', letterSpacing: '-0.02em' }}>₹{calculateGrandTotal().toFixed(0)}</span>
+                {discountAmount > 0 && <span style={{ background: 'rgba(255,255,255,0.2)', color: 'white', fontSize: '0.68rem', fontWeight: 700, padding: '2px 7px', borderRadius: '10px' }}>-₹{discountAmount} छूट</span>}
+              </div>
             </div>
           </div>
 
-          <div style={{ padding: '1rem', paddingBottom: '160px' }}>
-            
-            {/* Recording Controls */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '1.5rem' }}>
-               <div style={{ width: '100%', marginBottom: '1rem' }}>
-                 <div className={`mic-btn ${isRecording ? 'recording' : ''}`} style={{ margin: '0 auto', cursor: 'default', width: '60px', height: '60px' }}>
-                   <Mic size={24} />
-                 </div>
-               </div>
-               
-               <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem' }}>
-                 {!isRecording ? (
-                   <button className="btn btn-primary" onClick={startRecording} style={{ borderRadius: '50px', padding: '0.75rem 2rem' }}>
-                     <Mic size={20} style={{ marginRight: '8px' }} /> माइक से जोड़ें (Voice Add)
-                   </button>
-                 ) : (
-                   <button className="btn btn-primary" onClick={stopRecording} style={{ borderRadius: '50px', padding: '0.75rem 2rem', backgroundColor: 'var(--danger)', borderColor: 'var(--danger)' }}>
-                     <div style={{ width: '14px', height: '14px', backgroundColor: 'white', display: 'inline-block', marginRight: '8px', borderRadius: '2px' }} />
-                     रोकें (Stop)
-                   </button>
-                 )}
-               </div>
+          <div style={{ padding: '1.25rem 1rem', paddingBottom: '160px' }}>
 
-               {(isRecording || realtimeText || (billDetails && billDetails.spoken_text)) && (
-                 <div style={{ marginTop: '1rem', width: '100%', padding: '1rem', backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px' }}>
-                   <p style={{ fontSize: '1rem', color: '#14532d', margin: 0 }}>
-                     {(billDetails && billDetails.spoken_text) ? billDetails.spoken_text : (realtimeText || "बोलना शुरू करें...")}
-                   </p>
-                 </div>
-               )}
+            {/* Mic Zone */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '1.25rem', background: 'white', borderRadius: '20px', padding: '1.5rem 1rem', border: '1px solid var(--border)', boxShadow: 'var(--shadow-xs)' }}>
+              {/* Mic button */}
+              <div
+                className={`mic-btn ${isRecording ? 'recording' : ''}`}
+                onClick={isRecording ? stopRecording : startRecording}
+                style={{ cursor: 'pointer', marginBottom: '1rem' }}
+              >
+                <Mic size={34} />
+              </div>
 
-               {isProcessing && (
-                  <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span className="loader" style={{ fontSize: '1rem' }}>⏳</span>
-                    <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>आइटम प्रोसेस हो रहे हैं...</span>
+              {/* Waveform (only while recording) */}
+              {isRecording && (
+                <div className="waveform-container" style={{ marginBottom: '0.75rem' }}>
+                  {[...Array(8)].map((_, i) => <div key={i} className="waveform-bar" />)}
+                </div>
+              )}
+
+              {/* Action label */}
+              <div style={{ textAlign: 'center' }}>
+                {isProcessing ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-secondary)', fontSize: '0.88rem', fontWeight: 600 }}>
+                    <div style={{ width: 18, height: 18, border: '2.5px solid var(--border)', borderTopColor: 'var(--primary)', borderRadius: '50%', animation: 'spin 0.7s linear infinite', flexShrink: 0 }} />
+                    AI आइटम पहचान रहा है...
                   </div>
-               )}
+                ) : isRecording ? (
+                  <div>
+                    <div style={{ color: 'var(--danger)', fontWeight: 700, fontSize: '0.9rem', marginBottom: '2px' }}>सुन रहा है... बोलते रहें</div>
+                    <button onClick={stopRecording} style={{ background: 'var(--danger-light)', border: '1.5px solid var(--danger)', color: 'var(--danger)', borderRadius: '20px', padding: '5px 16px', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer', marginTop: '6px' }}>
+                      रोकें — Stop
+                    </button>
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{ color: 'var(--text-primary)', fontWeight: 700, fontSize: '0.9rem', marginBottom: '3px' }}>माइक दबाएं और बोलें</div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>हिंदी या English — "aloo do kilo, maggi ek"</div>
+                  </div>
+                )}
+              </div>
+
+              {/* Transcript box */}
+              {(realtimeText || (billDetails && billDetails.spoken_text)) && (
+                <div style={{ marginTop: '1rem', width: '100%', padding: '0.75rem 1rem', background: 'var(--success-light)', border: '1px solid #bbf7d0', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--success)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' }}>AI ने सुना</div>
+                  <p style={{ fontSize: '0.9rem', color: '#14532d', margin: 0, fontStyle: 'italic', lineHeight: 1.5 }}>
+                    "{(billDetails && billDetails.spoken_text) ? billDetails.spoken_text : realtimeText}"
+                  </p>
+                </div>
+              )}
             </div>
 
-            {/* Bill Preview List */}
+            {/* Bill Preview Table */}
             {billPreview && (
-              <div style={{ backgroundColor: 'white', borderRadius: '8px', boxShadow: 'var(--shadow-sm)', overflow: 'hidden' }}>
+              <div style={{ background: 'white', borderRadius: '16px', overflow: 'hidden', border: '1px solid var(--border)', boxShadow: 'var(--shadow-xs)' }}>
+                <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>बिल आइटम</span>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)' }}>{billPreview.length} item{billPreview.length !== 1 ? 's' : ''}</span>
+                </div>
+
                 <table className="mobile-list-table">
                   <thead>
                     <tr>
-                      <th className="item-col">आइटम (ITEM)</th>
-                      <th>रेट (RATE)</th>
-                      <th>मात्रा (QTY)</th>
-                      <th>कुल (TOTAL)</th>
+                      <th className="item-col">आइटम</th>
+                      <th>दर</th>
+                      <th>मात्रा</th>
+                      <th>कुल</th>
                     </tr>
                   </thead>
                   <tbody>
                     {billPreview.map((res, i) => (
-                      <tr key={i} style={{ backgroundColor: res.error ? '#fee2e2' : 'transparent' }}>
+                      <tr key={i} style={{ backgroundColor: res.error ? '#fef2f2' : 'transparent' }}>
                         <td className="item-col">
-                          <input 
-                            type="text" 
+                          <input
+                            type="text"
                             list={`stock-options-${i}`}
-                            value={res.item_name || ''} 
+                            value={res.item_name || ''}
                             onChange={(e) => handleItemSelect(i, e.target.value)}
-                            style={{ width: '100%', minWidth: '90px', border: 'none', backgroundColor: 'transparent', fontWeight: 'bold', color: 'var(--text-dark)', fontSize: '0.9rem' }}
+                            style={{ width: '100%', minWidth: '90px', border: 'none', background: 'transparent', fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.85rem', fontFamily: 'inherit' }}
                             placeholder="आइटम का नाम"
                           />
                           <datalist id={`stock-options-${i}`}>
@@ -406,7 +497,7 @@ export default function VoiceBilling() {
                               <option key={stock.id} value={stock.master_inventory?.item_name} />
                             ))}
                           </datalist>
-                          {res.error && <div style={{ color: 'red', fontSize: '0.7rem', marginTop: '2px' }}>{res.error === true ? 'नहीं मिला (Not Found)' : res.error}</div>}
+                          {res.error && <div style={{ color: 'var(--danger)', fontSize: '0.68rem', marginTop: '2px', fontWeight: 600 }}>{res.error === true ? '⚠ नहीं मिला' : res.error}</div>}
                         </td>
                         <td>
                           <div style={{ display: 'flex', justifyContent: 'center' }}>
@@ -418,230 +509,287 @@ export default function VoiceBilling() {
                             <Stepper value={res.quantity_billed || 0} onChange={(val) => handlePreviewEdit(i, 'quantity_billed', val)} />
                           </div>
                         </td>
-                        <td style={{ fontWeight: 'bold', color: 'var(--primary-blue)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <span>₹{res.item_total || 0}</span>
-                          <Trash2 size={16} color="var(--danger)" style={{ cursor: 'pointer', marginLeft: '6px' }} onClick={() => handleRemoveItem(i)} />
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: '6px' }}>
+                            <span style={{ fontWeight: 700, color: 'var(--primary)', fontSize: '0.88rem' }}>₹{res.item_total || 0}</span>
+                            <Trash2 size={15} color="var(--danger)" style={{ cursor: 'pointer', flexShrink: 0 }} onClick={() => handleRemoveItem(i)} />
+                          </div>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                
-                <div style={{ padding: '0.5rem', borderTop: '1px solid #e5e7eb', textAlign: 'center', backgroundColor: '#f9fafb' }}>
-                  <button onClick={handleAddBlankItem} style={{ color: 'var(--primary-blue)', fontWeight: 'bold', border: 'none', background: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', width: '100%', padding: '0.5rem' }}>
-                    <Plus size={18} /> आइटम जोड़ें (Add Item)
+
+                {/* Add item */}
+                <div style={{ padding: '0.6rem', borderTop: '1px solid var(--border)', background: 'var(--surface-2)' }}>
+                  <button onClick={handleAddBlankItem} style={{ color: 'var(--primary)', fontWeight: 700, border: 'none', background: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', width: '100%', padding: '0.4rem', fontSize: '0.85rem', cursor: 'pointer' }}>
+                    <Plus size={16} /> आइटम जोड़ें
                   </button>
                 </div>
-                <div style={{ padding: '0.75rem 1rem', borderTop: '1px solid #e5e7eb', backgroundColor: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 'bold', color: 'var(--text-dark)' }}>छूट (Discount):</span>
-                  <div style={{ display: 'flex', alignItems: 'center' }}>
-                    <span style={{ marginRight: '4px', fontWeight: 'bold', color: 'var(--text-dark)' }}>₹</span>
-                    <input 
-                      type="number" 
-                      value={discountAmount || ''}
-                      onChange={(e) => setDiscountAmount(parseFloat(e.target.value) || 0)}
-                      placeholder="0"
-                      style={{ width: '80px', padding: '0.4rem', borderRadius: '4px', border: '1px solid #ccc', textAlign: 'right', fontWeight: 'bold' }}
-                    />
+
+                {/* Discount */}
+                <div style={{ padding: '0.875rem 1rem', borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontWeight: 600, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>छूट (Discount)</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ fontWeight: 700, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>₹</span>
+                      <input
+                        type="number"
+                        value={discountAmount || ''}
+                        onChange={(e) => setDiscountAmount(parseFloat(e.target.value) || 0)}
+                        placeholder="0"
+                        style={{ width: '72px', padding: '5px 8px', borderRadius: '6px', border: '1.5px solid var(--border)', textAlign: 'right', fontWeight: 700, fontFamily: 'inherit', fontSize: '0.9rem' }}
+                      />
+                    </div>
+                  </div>
+                  <div className="preset-discounts">
+                    {[10, 20, 50, 100].map(amt => (
+                      <button key={amt} type="button" className="preset-discount-btn" onClick={() => setDiscountAmount(amt)}>-₹{amt}</button>
+                    ))}
+                    <button type="button" className="preset-discount-btn" style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }} onClick={() => setDiscountAmount(0)}>Clear</button>
                   </div>
                 </div>
               </div>
             )}
           </div>
 
-          {/* Sticky Footer for Screen 1 */}
+          {/* Sticky Bottom CTA */}
           {billPreview && billPreview.length > 0 && (
-            <div style={{ position: 'fixed', bottom: '70px', left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: '480px', backgroundColor: 'white', padding: '1rem', borderTop: '1px solid #e5e7eb', zIndex: 90, boxShadow: '0 -4px 6px -1px rgba(0,0,0,0.05)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', fontWeight: 'bold', fontSize: '0.9rem' }}>
-                <span>{billPreview.length} आइटम ({billPreview.length} ITEMS)</span>
-                <span>कुल (Total): ₹{calculateGrandTotal().toFixed(2)}</span>
+            <div style={{ position: 'fixed', bottom: '64px', left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: '480px', background: 'white', padding: '0.875rem 1rem', borderTop: '1px solid var(--border)', zIndex: 90, boxShadow: '0 -6px 20px rgba(0,0,0,0.07)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{billPreview.length} आइटम</span>
+                <span style={{ fontWeight: 800, fontSize: '1.1rem', color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>कुल: ₹{calculateGrandTotal().toFixed(0)}</span>
               </div>
               {(() => {
                 const hasErrors = billPreview.some(item => item.error);
                 return (
-                  <button 
-                    className="btn btn-primary" 
-                    style={{ 
-                      width: '100%', 
-                      padding: '1rem', 
-                      fontSize: '1.1rem', 
-                      borderRadius: '8px',
-                      opacity: hasErrors ? 0.5 : 1,
-                      cursor: hasErrors ? 'not-allowed' : 'pointer'
-                    }}
+                  <button
+                    className="btn btn-primary"
+                    style={{ width: '100%', padding: '0.875rem', fontSize: '1rem', borderRadius: '12px', opacity: hasErrors ? 0.5 : 1, cursor: hasErrors ? 'not-allowed' : 'pointer' }}
                     onClick={() => setViewState('settlement')}
                     disabled={hasErrors}
                   >
-                    <FileText size={20} style={{ marginRight: '8px' }} /> 
-                    {hasErrors ? "कृपया त्रुटियों को ठीक करें (Fix Errors First)" : "बिल देखें (Preview Bill)"}
+                    <FileText size={18} style={{ marginRight: '8px' }} />
+                    {hasErrors ? 'पहले त्रुटियाँ ठीक करें' : 'बिल सेटल करें →'}
                   </button>
                 );
               })()}
             </div>
           )}
+
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </>
       )}
 
-      {/* ---------------- VIEW STATE 2: SETTLEMENT ---------------- */}
+      {/* ═══════════════════════════════════════
+          VIEW 2 — SETTLEMENT
+      ═══════════════════════════════════════ */}
       {viewState === 'settlement' && (
-        <div style={{ backgroundColor: '#fff', minHeight: '100vh' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', borderBottom: '1px solid #e5e7eb' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <ArrowLeft size={24} color="var(--primary-blue)" onClick={() => setViewState('input')} style={{ cursor: 'pointer' }} />
-              <span style={{ fontWeight: 'bold', color: 'var(--primary-blue)', fontSize: '1.2rem' }}>बिल सेटलमेंट (Settlement)</span>
-            </div>
-            <Printer size={24} color="var(--text-dark)" />
-          </div>
-
-          <div style={{ padding: '1rem', paddingBottom: '100px' }}>
-            <div style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '1rem', marginBottom: '1.5rem' }}>
-              <h3 style={{ fontSize: '0.9rem', color: 'var(--primary-blue)', marginBottom: '1rem', marginTop: 0 }}>बिल विवरण (BILL DETAILS)</h3>
-              
-              {billPreview.map((item, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-                  <span>{item.item_name} x {item.quantity_billed}</span>
-                  <span style={{ fontWeight: '600' }}>₹{item.item_total}</span>
-                </div>
-              ))}
-              
-              {discountAmount > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #e5e7eb', fontSize: '1rem', color: 'var(--danger)' }}>
-                  <span>छूट (Discount)</span>
-                  <span>-₹{discountAmount.toFixed(2)}</span>
-                </div>
-              )}
-              
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: discountAmount > 0 ? '0.5rem' : '1rem', paddingTop: discountAmount > 0 ? '0.5rem' : '1rem', borderTop: discountAmount > 0 ? 'none' : '1px solid #e5e7eb', fontWeight: 'bold', fontSize: '1.1rem', color: 'var(--primary-blue)' }}>
-                <span>कुल राशि (Grand Total)</span>
-                <span>₹{calculateGrandTotal().toFixed(2)}</span>
+        <div style={{ background: 'white', minHeight: '100vh' }}>
+          {/* Header */}
+          <div style={{ background: 'var(--primary-gradient)', padding: '1rem', paddingBottom: '1.25rem', borderBottomLeftRadius: '20px', borderBottomRightRadius: '20px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '0.875rem' }}>
+              <button onClick={() => setViewState('input')} style={{ background: 'rgba(255,255,255,0.2)', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', padding: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', color: 'white' }}>
+                <ArrowLeft size={18} />
+              </button>
+              <div>
+                <div style={{ color: 'white', fontWeight: 700, fontSize: '1rem' }}>बिल सेटलमेंट</div>
+                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.7rem' }}>Settlement</div>
               </div>
             </div>
 
-            <div style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '1rem', backgroundColor: '#f9fafb' }}>
+            {/* Grand total hero */}
+            <div style={{ background: 'rgba(255,255,255,0.12)', borderRadius: '12px', padding: '1rem', border: '1px solid rgba(255,255,255,0.2)', textAlign: 'center' }}>
+              <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: '0.75rem', fontWeight: 600, marginBottom: '4px' }}>कुल राशि</div>
+              <div style={{ color: 'white', fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.03em' }}>₹{calculateGrandTotal().toFixed(0)}</div>
+              {discountAmount > 0 && <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: '0.75rem', marginTop: '3px' }}>₹{discountAmount} छूट लागू</div>}
+            </div>
+          </div>
+
+          <div style={{ padding: '1rem', paddingBottom: '100px' }}>
+            {/* Bill line items */}
+            <div style={{ background: 'var(--surface-2)', borderRadius: '14px', border: '1px solid var(--border)', overflow: 'hidden', marginBottom: '1rem' }}>
+              <div style={{ padding: '0.7rem 1rem', borderBottom: '1px solid var(--border)' }}>
+                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>बिल विवरण</span>
+              </div>
+              <div style={{ padding: '0.5rem 1rem' }}>
+                {billPreview.map((item, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: i < billPreview.length - 1 ? '1px solid var(--border)' : 'none', fontSize: '0.88rem' }}>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{item.item_name} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>× {item.quantity_billed}</span></span>
+                    <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>₹{item.item_total}</span>
+                  </div>
+                ))}
+                {discountAmount > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.6rem 0', borderTop: '1px dashed var(--border)', marginTop: '4px', fontSize: '0.88rem' }}>
+                    <span style={{ color: 'var(--success)', fontWeight: 600 }}>छूट</span>
+                    <span style={{ color: 'var(--success)', fontWeight: 700 }}>-₹{discountAmount.toFixed(0)}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Payment type + customer */}
+            <div style={{ background: 'var(--surface-2)', borderRadius: '14px', border: '1px solid var(--border)', padding: '1rem', marginBottom: '1.25rem' }}>
+              {/* Credit toggle */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                <span style={{ fontWeight: '600', color: 'var(--text-dark)' }}>उधार पर? (On Credit?)</span>
-                <label style={{ position: 'relative', display: 'inline-block', width: '40px', height: '20px' }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.9rem' }}>उधार पर?</div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>On Credit</div>
+                </div>
+                <label style={{ position: 'relative', display: 'inline-block', width: '44px', height: '24px', flexShrink: 0 }}>
                   <input type="checkbox" checked={isCredit} onChange={e => setIsCredit(e.target.checked)} style={{ opacity: 0, width: 0, height: 0 }} />
-                  <span style={{ position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: isCredit ? 'var(--primary-blue)' : '#ccc', borderRadius: '20px', transition: '.4s' }}>
-                    <span style={{ position: 'absolute', height: '16px', width: '16px', left: isCredit ? '22px' : '2px', bottom: '2px', backgroundColor: 'white', borderRadius: '50%', transition: '.4s' }} />
+                  <span style={{ position: 'absolute', cursor: 'pointer', inset: 0, background: isCredit ? 'var(--primary)' : '#d1d5db', borderRadius: '24px', transition: '0.25s' }}>
+                    <span style={{ position: 'absolute', height: '18px', width: '18px', left: isCredit ? '23px' : '3px', bottom: '3px', background: 'white', borderRadius: '50%', transition: '0.25s', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
                   </span>
                 </label>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>ग्राहक चुनें (Choose Customer)</label>
-                <input 
-                  type="text" 
-                  className="input-field" 
-                  placeholder="🔍 खोजें (Search or Add)..." 
+              {/* Customer name */}
+              <div style={{ position: 'relative' }} ref={customerAutocompleteRef}>
+                <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '6px', display: 'block' }}>ग्राहक का नाम</label>
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="खोजें या नया नाम लिखें..."
                   value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  style={{ backgroundColor: 'white' }}
+                  onChange={handleCustomerNameChange}
+                  style={{ background: 'white' }}
                 />
+                {showCustomerSuggestions && filteredCustomerSuggestions.length > 0 && (
+                  <div className="autocomplete-dropdown">
+                    {filteredCustomerSuggestions.map((name, index) => (
+                      <div key={index} className="autocomplete-item" onClick={() => selectCustomer(name)}>
+                        <span style={{ fontWeight: 600 }}>{name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
-            <div style={{ marginTop: '2rem' }}>
-              <button 
-                className="btn btn-primary" 
-                style={{ width: '100%', padding: '1rem', fontSize: '1.1rem', borderRadius: '8px', backgroundColor: 'var(--success)', border: 'none' }}
-                onClick={handleFinalizeBill}
-                disabled={isProcessing}
-              >
-                {isProcessing ? 'प्रोसेस हो रहा है...' : <><CheckCircle size={20} style={{ marginRight: '8px' }} /> बिल पक्का करें (Finalize Bill)</>}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ---------------- VIEW STATE 3: SUCCESS ---------------- */}
-      {viewState === 'success' && billDetails && (
-        <div style={{ padding: '2rem 1rem', backgroundColor: '#fff', minHeight: '100vh', textAlign: 'center' }}>
-          <CheckCircle size={60} color="var(--success)" style={{ marginBottom: '1rem', margin: '0 auto' }} />
-          <h2 style={{ color: 'var(--success)', marginBottom: '0.5rem' }}>बिल पक्का हो गया</h2>
-          <p style={{ color: 'var(--text-muted)', marginBottom: '2rem' }}>Bill Finalized Successfully</p>
-
-          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', marginBottom: '2rem' }}>
-            <button 
-              className="btn btn-outline" 
-              onClick={handleDownloadPDF}
-              style={{ flex: 1, borderColor: 'var(--danger)', color: 'var(--danger)', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyItems: 'center', justifyContent: 'center', gap: '8px' }}>
-              <FileText size={20} /> डाउनलोड PDF
+            {/* Finalize button */}
+            <button
+              className="btn"
+              style={{ width: '100%', padding: '1rem', fontSize: '1rem', borderRadius: '14px', background: 'var(--success)', color: 'white', boxShadow: '0 4px 14px rgba(22,163,74,0.3)', border: 'none' }}
+              onClick={handleFinalizeBill}
+              disabled={isProcessing}
+            >
+              {isProcessing ? (
+                <span style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
+                  <div style={{ width: 18, height: 18, border: '2.5px solid rgba(255,255,255,0.4)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+                  प्रोसेस हो रहा है...
+                </span>
+              ) : (
+                <><CheckCircle size={20} style={{ marginRight: '8px' }} /> बिल पक्का करें</>
+              )}
             </button>
           </div>
 
-          <button 
-            className="btn btn-primary" 
-            style={{ width: '100%', padding: '1rem', borderRadius: '8px', backgroundColor: '#f3f4f6', color: 'var(--primary-blue)', border: 'none' }}
-            onClick={() => {
-              setViewState('input');
-              setBillPreview(null);
-              setBillDetails(null);
-              setCustomerName('');
-              setIsCredit(false);
-              setRealtimeText('');
-              setDiscountAmount(0);
-            }}
-          >
-            नया बिल शुरू करें (Start New Bill)
-          </button>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
       )}
 
-      {/* Hidden Receipt Template for PDF Generation */}
+      {/* ═══════════════════════════════════════
+          VIEW 3 — SUCCESS
+      ═══════════════════════════════════════ */}
+      {viewState === 'success' && billDetails && (
+        <div style={{ background: 'white', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+          {/* Success Hero */}
+          <div style={{ background: 'linear-gradient(135deg, #064e3b 0%, #059669 100%)', padding: '2.5rem 1rem 2rem', textAlign: 'center', borderBottomLeftRadius: '28px', borderBottomRightRadius: '28px' }}>
+            <div style={{ width: 72, height: 72, background: 'rgba(255,255,255,0.2)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1rem', border: '2px solid rgba(255,255,255,0.4)' }}>
+              <CheckCircle size={38} color="white" />
+            </div>
+            <h2 style={{ color: 'white', fontWeight: 800, fontSize: '1.4rem', margin: '0 0 4px', letterSpacing: '-0.02em' }}>बिल पक्का हो गया!</h2>
+            <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '0.85rem', margin: 0 }}>Bill saved successfully</p>
+
+            {/* Amount */}
+            <div style={{ marginTop: '1.25rem', background: 'rgba(255,255,255,0.12)', borderRadius: '14px', padding: '0.875rem', border: '1px solid rgba(255,255,255,0.2)' }}>
+              <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: '0.72rem', fontWeight: 600 }}>कुल राशि</div>
+              <div style={{ color: 'white', fontSize: '1.8rem', fontWeight: 800, letterSpacing: '-0.03em' }}>₹{billDetails.total_bill_amount?.toFixed(0)}</div>
+              {billDetails.customer_name && (
+                <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '0.8rem', marginTop: '4px', fontWeight: 500 }}>
+                  {billDetails.is_credit ? '🔴 उधार' : '🟢 नकद'} — {billDetails.customer_name}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div style={{ padding: '1.25rem 1rem', flex: 1 }}>
+            {/* Action buttons */}
+            <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem' }}>
+              <button
+                className="btn btn-outline"
+                onClick={handleDownloadPDF}
+                style={{ flex: 1, borderRadius: '12px', padding: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontWeight: 600, borderColor: 'var(--border-strong)', fontSize: '0.88rem' }}
+              >
+                <FileText size={18} /> PDF डाउनलोड
+              </button>
+            </div>
+
+            <button
+              className="btn btn-primary"
+              style={{ width: '100%', padding: '1rem', borderRadius: '14px', fontSize: '1rem' }}
+              onClick={() => {
+                setViewState('input');
+                setBillPreview(null);
+                setBillDetails(null);
+                setCustomerName('');
+                setIsCredit(false);
+                setRealtimeText('');
+                setDiscountAmount(0);
+              }}
+            >
+              <Mic size={18} style={{ marginRight: '8px' }} /> नया बिल बनाएं
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden PDF receipt template */}
       {billDetails && viewState === 'success' && (
         <div id="receipt-download-container" style={{ display: 'none', width: '300px', padding: '20px', backgroundColor: 'white', color: 'black', fontFamily: 'sans-serif' }}>
           <div style={{ textAlign: 'center', borderBottom: '2px dashed #ccc', paddingBottom: '10px', marginBottom: '10px' }}>
-            <h2 style={{ margin: '0 0 5px 0' }}>दुकानदार सहायक</h2>
-            <p style={{ margin: 0, fontSize: '12px', color: '#555' }}>Shopkeeper Assistant</p>
+            <h2 style={{ margin: '0 0 4px 0', fontSize: '16px' }}>SmartDukan</h2>
+            <p style={{ margin: 0, fontSize: '11px', color: '#555' }}>दुकानदार सहायक</p>
           </div>
-          
           <div style={{ fontSize: '12px', marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <div><strong>दिनांक (Date):</strong> {new Date().toLocaleDateString('en-IN')}</div>
-            {billDetails.customer_name && <div><strong>ग्राहक (Customer):</strong> {billDetails.customer_name}</div>}
-            {billDetails.is_credit && <div style={{ color: '#b91c1c', fontWeight: 'bold' }}>उधार बिल (CREDIT BILL)</div>}
+            <div><strong>दिनांक:</strong> {new Date().toLocaleDateString('en-IN')}</div>
+            {billDetails.customer_name && <div><strong>ग्राहक:</strong> {billDetails.customer_name}</div>}
+            {billDetails.is_credit && <div style={{ color: '#b91c1c', fontWeight: 'bold' }}>⚠ उधार बिल (CREDIT BILL)</div>}
           </div>
-
           <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse', marginBottom: '10px' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid #ccc' }}>
-                <th style={{ textAlign: 'left', padding: '6px 0' }}>आइटम (Item)</th>
-                <th style={{ textAlign: 'center', padding: '6px 0' }}>मात्रा (Qty)</th>
-                <th style={{ textAlign: 'right', padding: '6px 0' }}>कुल (Total)</th>
+                <th style={{ textAlign: 'left', padding: '5px 0' }}>आइटम</th>
+                <th style={{ textAlign: 'center', padding: '5px 0' }}>मात्रा</th>
+                <th style={{ textAlign: 'right', padding: '5px 0' }}>कुल</th>
               </tr>
             </thead>
             <tbody>
               {billDetails.results.map((item, idx) => (
                 <tr key={idx} style={{ borderBottom: '1px dotted #eee' }}>
-                  <td style={{ padding: '6px 0' }}>{item.item_name}</td>
-                  <td style={{ padding: '6px 0', textAlign: 'center' }}>{item.quantity_billed}</td>
-                  <td style={{ padding: '6px 0', textAlign: 'right', fontWeight: 'bold' }}>₹{item.item_total}</td>
+                  <td style={{ padding: '5px 0' }}>{item.item_name}</td>
+                  <td style={{ padding: '5px 0', textAlign: 'center' }}>{item.quantity_billed}</td>
+                  <td style={{ padding: '5px 0', textAlign: 'right', fontWeight: 'bold' }}>₹{item.item_total}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-
           {billDetails.discount_amount > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', borderTop: '2px dashed #ccc', paddingTop: '10px' }}>
-              <span>उप-कुल (Subtotal)</span>
-              <span>₹{billDetails.sub_total.toFixed(2)}</span>
-            </div>
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', borderTop: '1px dashed #ccc', paddingTop: '8px' }}>
+                <span>उप-कुल</span><span>₹{billDetails.sub_total?.toFixed(2)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#b91c1c' }}>
+                <span>छूट</span><span>-₹{billDetails.discount_amount.toFixed(2)}</span>
+              </div>
+            </>
           )}
-          {billDetails.discount_amount > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#b91c1c' }}>
-              <span>छूट (Discount)</span>
-              <span>-₹{billDetails.discount_amount.toFixed(2)}</span>
-            </div>
-          )}
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '14px', borderTop: billDetails.discount_amount > 0 ? 'none' : '2px dashed #ccc', paddingTop: billDetails.discount_amount > 0 ? '5px' : '10px' }}>
-            <span>कुल राशि (Grand Total)</span>
-            <span>₹{billDetails.total_bill_amount.toFixed(2)}</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '14px', borderTop: '2px dashed #ccc', paddingTop: '8px', marginTop: '4px' }}>
+            <span>कुल राशि</span><span>₹{billDetails.total_bill_amount?.toFixed(2)}</span>
           </div>
-          
-          <div style={{ textAlign: 'center', marginTop: '20px', fontSize: '10px', color: '#777' }}>
-            धन्यवाद! फिर पधारें।<br />
-            (Thank you for shopping)
+          <div style={{ textAlign: 'center', marginTop: '18px', fontSize: '10px', color: '#777' }}>
+            धन्यवाद! फिर पधारें।<br />(Thank you for shopping)
           </div>
         </div>
       )}
