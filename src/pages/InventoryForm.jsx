@@ -16,6 +16,9 @@ export default function InventoryForm() {
   const [aliases, setAliases] = useState([]);
   const [newAlias, setNewAlias] = useState('');
 
+  // Master inventory catalog (all items, not just user's)
+  const [masterItems, setMasterItems] = useState([]);
+
   // Autocomplete suggestions States
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [filteredSuggestions, setFilteredSuggestions] = useState([]);
@@ -29,21 +32,50 @@ export default function InventoryForm() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState('all'); // 'all' or 'low'
 
+  const fetchMasterInventory = async () => {
+    const { data, error } = await supabase
+      .from('master_inventory')
+      .select('id, item_name, category, unit');
+    if (!error && data) setMasterItems(data);
+  };
+
+  // Resolves a valid user ID and guarantees the row exists in public.users before returning
+  const resolveUserId = async () => {
+    // 1. Active Google/auth session takes priority
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user?.id) {
+      localStorage.setItem('demoUserId', session.user.id);
+      return session.user.id;
+    }
+
+    // 2. Use cached ID (or generate one), then upsert so the row definitely exists
+    const cached = localStorage.getItem('demoUserId');
+    const userId = cached || crypto.randomUUID();
+    if (!cached) localStorage.setItem('demoUserId', userId);
+
+    const now = new Date().toISOString();
+    const { error } = await supabase.from('users')
+      .upsert({ id: userId, created_at: now, updated_at: now }, { onConflict: 'id', ignoreDuplicates: true });
+
+    if (!error) return userId;
+
+    // 3. If upsert failed (e.g. RLS), fall back to first existing row
+    console.warn('[resolveUserId] upsert failed:', error.message);
+    const { data: users } = await supabase.from('users').select('id').limit(1);
+    if (users?.length > 0) {
+      localStorage.setItem('demoUserId', users[0].id);
+      return users[0].id;
+    }
+
+    return null;
+  };
+
   const fetchCurrentStock = async () => {
     try {
-      // HACK: Use localStorage to persist the demo user ID across the app
-      let userId = localStorage.getItem('demoUserId');
-      if (!userId) {
-        // Fallback: fetch the first user from the DB
-        const { data: users } = await supabase.from('users').select('id').limit(1);
-        if (users && users.length > 0) {
-          userId = users[0].id;
-          localStorage.setItem('demoUserId', userId);
-        }
-      }
+      const userId = await resolveUserId();
 
       if (!userId) {
-        console.warn("No user ID found to fetch stock. Table will remain empty until you add an item.");
+        console.warn("No user ID found to fetch stock.");
         return;
       }
 
@@ -82,6 +114,7 @@ export default function InventoryForm() {
   useEffect(() => {
     const timer = setTimeout(() => {
       fetchCurrentStock();
+      fetchMasterInventory();
     }, 0);
     return () => clearTimeout(timer);
   }, []);
@@ -97,31 +130,54 @@ export default function InventoryForm() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const uniqueCategories = [...new Set(stockList.map(s => s.master_inventory?.category).filter(Boolean))];
-  const uniqueUnits = [...new Set(stockList.map(s => s.master_inventory?.unit).filter(Boolean))];
+  const uniqueCategories = [...new Set([
+    ...stockList.map(s => s.master_inventory?.category),
+    ...masterItems.map(m => m.category),
+  ].filter(Boolean))];
+
+  const uniqueUnits = [...new Set([
+    ...stockList.map(s => s.master_inventory?.unit),
+    ...masterItems.map(m => m.unit),
+  ].filter(Boolean))];
 
   const handleItemNameChange = (e) => {
     const val = e.target.value;
     setItemName(val);
-    
+
     if (val.trim() === '') {
       setFilteredSuggestions([]);
       setShowSuggestions(false);
-    } else {
-      // Filter list of inventory items matching characters typed
-      const matches = stockList.filter(s => 
-        s.master_inventory?.item_name?.toLowerCase().includes(val.toLowerCase())
-      );
-      setFilteredSuggestions(matches);
-      setShowSuggestions(true);
+      return;
     }
 
-    const existing = stockList.find(s => s.master_inventory?.item_name === val);
-    if (existing) {
-      selectExistingItem(existing);
+    const lower = val.toLowerCase();
+
+    // User's existing stock items that match
+    const userMatches = stockList
+      .filter(s => s.master_inventory?.item_name?.toLowerCase().includes(lower))
+      .map(s => ({ type: 'user_stock', data: s }));
+
+    // Master inventory items not already in user's stock
+    const userNames = new Set(stockList.map(s => s.master_inventory?.item_name));
+    const masterMatches = masterItems
+      .filter(m => m.item_name?.toLowerCase().includes(lower) && !userNames.has(m.item_name))
+      .map(m => ({ type: 'master', data: m }));
+
+    const combined = [...userMatches, ...masterMatches];
+    setFilteredSuggestions(combined);
+    setShowSuggestions(combined.length > 0);
+
+    // Auto-populate on exact match
+    const exactStock = stockList.find(s => s.master_inventory?.item_name === val);
+    if (exactStock) {
+      selectExistingItem(exactStock);
+    } else {
+      const exactMaster = masterItems.find(m => m.item_name === val);
+      if (exactMaster) selectFromMaster(exactMaster);
     }
   };
 
+  // Populate all fields from user's existing stock entry
   const selectExistingItem = (existing) => {
     setItemName(existing.master_inventory?.item_name || '');
     setCategory(existing.master_inventory?.category || '');
@@ -130,6 +186,18 @@ export default function InventoryForm() {
     setCurrentStock(existing.current_stock || '');
     setLowStockLimit(existing.low_stock_limit || 10);
     setAliases(existing.aliases || []);
+    setShowSuggestions(false);
+  };
+
+  // Populate name/category/unit from master catalog; leave price/stock blank for new entry
+  const selectFromMaster = (masterItem) => {
+    setItemName(masterItem.item_name || '');
+    setCategory(masterItem.category || '');
+    setUnit(masterItem.unit || '');
+    setPrice('');
+    setCurrentStock('');
+    setLowStockLimit(10);
+    setAliases([]);
     setShowSuggestions(false);
   };
 
@@ -194,17 +262,7 @@ export default function InventoryForm() {
       return;
     }
     try {
-      let userId = localStorage.getItem('demoUserId');
-      
-      if (!userId) {
-        const { data: users } = await supabase.from('users').select('id').limit(1);
-        if (users && users.length > 0) {
-          userId = users[0].id;
-        } else {
-          userId = window.prompt("Demo Mode: No logged-in user found.\nPlease paste a valid User UUID:");
-        }
-        if (userId) localStorage.setItem('demoUserId', userId);
-      }
+      const userId = await resolveUserId();
 
       if (!userId) {
         alert("स्टॉक सहेजने के लिए एक वैध उपयोगकर्ता आईडी आवश्यक है।");
@@ -312,18 +370,38 @@ export default function InventoryForm() {
                   />
                   {showSuggestions && filteredSuggestions.length > 0 && (
                     <div className="autocomplete-dropdown">
-                      {filteredSuggestions.map((stock) => (
-                        <div 
-                          key={stock.id} 
-                          className="autocomplete-item"
-                          onClick={() => selectExistingItem(stock)}
-                        >
-                          <span style={{ fontWeight: 600 }}>{stock.master_inventory?.item_name}</span>
-                          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                            {stock.master_inventory?.category} | ₹{stock.selling_price}
-                          </span>
-                        </div>
-                      ))}
+                      {filteredSuggestions.map((suggestion) => {
+                        if (suggestion.type === 'user_stock') {
+                          const stock = suggestion.data;
+                          return (
+                            <div
+                              key={`us-${stock.id}`}
+                              className="autocomplete-item"
+                              onClick={() => selectExistingItem(stock)}
+                            >
+                              <span style={{ fontWeight: 600 }}>{stock.master_inventory?.item_name}</span>
+                              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                {stock.master_inventory?.category} | ₹{stock.selling_price} | स्टॉक: {stock.current_stock} {stock.master_inventory?.unit}
+                              </span>
+                            </div>
+                          );
+                        } else {
+                          const master = suggestion.data;
+                          return (
+                            <div
+                              key={`m-${master.id}`}
+                              className="autocomplete-item"
+                              onClick={() => selectFromMaster(master)}
+                              style={{ borderLeft: '3px solid #93c5fd' }}
+                            >
+                              <span style={{ fontWeight: 600 }}>{master.item_name}</span>
+                              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                {master.category} | {master.unit} · <em>नया आइटम जोड़ें</em>
+                              </span>
+                            </div>
+                          );
+                        }
+                      })}
                     </div>
                   )}
                   <button 
