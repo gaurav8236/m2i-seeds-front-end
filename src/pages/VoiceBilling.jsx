@@ -186,7 +186,7 @@ export default function VoiceBilling() {
     try {
       const formData = new FormData();
       formData.append('file', audioBlob, 'recording.webm');
-      
+
       const demoUserId = localStorage.getItem('demoUserId');
       if (demoUserId) {
         formData.append('user_id', demoUserId);
@@ -195,6 +195,8 @@ export default function VoiceBilling() {
       }
 
       formData.append('preview_only', 'true');
+      formData.append('language', 'hi');                              // tell Whisper the language is Hindi
+      formData.append('web_speech_text', webSpeechTextRef.current);  // browser transcript as fallback
 
       const RAILWAY_API_URL = 'https://web-production-55116.up.railway.app/voice-search/';
       
@@ -241,7 +243,7 @@ export default function VoiceBilling() {
         match_results: results,
         checkout_completed: false,
       }).then(({ error: logErr }) => {
-        if (logErr) console.warn('[voice_logs]', logErr.message);
+        if (logErr) console.error('[voice_logs] insert failed:', logErr.message, logErr.code);
       });
 
       setBillPreview(results);
