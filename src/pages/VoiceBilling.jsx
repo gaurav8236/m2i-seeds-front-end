@@ -15,6 +15,7 @@ export default function VoiceBilling() {
   const [realtimeText, setRealtimeText] = useState("");
   const [stockList, setStockList] = useState([]);
   const [discountAmount, setDiscountAmount] = useState(0);
+  const [editingItemIndex, setEditingItemIndex] = useState(null);
   
   // Settlement fields
   const [isCredit, setIsCredit] = useState(false);
@@ -246,7 +247,38 @@ export default function VoiceBilling() {
         if (logErr) console.error('[voice_logs] insert failed:', logErr.message, logErr.code);
       });
 
-      setBillPreview(results);
+      // Auto-resolve closest matches; skip items with no match
+      const processedResults = results.reduce((acc, item) => {
+        if (!item.error) {
+          acc.push(item);
+        } else if (typeof item.error === 'string') {
+          const closestMatch = item.error.match(/Closest:\s*(.+?)\s*\(\d+%\)/);
+          if (closestMatch) {
+            const closestName = closestMatch[1].trim();
+            const stockItem = stockList.find(s => s.master_inventory?.item_name === closestName);
+            if (stockItem) {
+              const qty = parseFloat(item.quantity_billed) || 1;
+              const price = parseFloat(stockItem.selling_price) || 0;
+              acc.push({
+                item_name: closestName,
+                quantity_billed: qty,
+                price_per_unit: price,
+                item_total: qty * price,
+                stock_remaining: stockItem.current_stock - qty,
+                stock_id: stockItem.id,
+                current_stock: stockItem.current_stock,
+                unit: stockItem.master_inventory?.unit || '',
+                error: false
+              });
+            }
+          }
+          // no Closest: or not in local stock → skip
+        }
+        // error === true (no match at all) → skip
+        return acc;
+      }, []);
+
+      setBillPreview(processedResults);
       setBillDetails({ spoken_text: data.spoken_text });
 
     } catch (error) {
@@ -277,19 +309,20 @@ export default function VoiceBilling() {
   const handleItemSelect = (index, selectedItemName) => {
     const updated = [...billPreview];
     updated[index].item_name = selectedItemName;
-    
+
     const stockItem = stockList.find(s => s.master_inventory?.item_name === selectedItemName);
     if (stockItem) {
       updated[index].price_per_unit = parseFloat(stockItem.selling_price) || 0;
       updated[index].stock_id = stockItem.id;
       updated[index].current_stock = stockItem.current_stock;
+      updated[index].unit = stockItem.master_inventory?.unit || '';
       updated[index].error = false;
-      
+
       const qty = parseFloat(updated[index].quantity_billed) || 0;
       updated[index].item_total = qty * updated[index].price_per_unit;
       updated[index].stock_remaining = updated[index].current_stock - qty;
     }
-    
+
     setBillPreview(updated);
   };
 
@@ -308,9 +341,16 @@ export default function VoiceBilling() {
       item_total: 0,
       stock_remaining: 0,
       stock_id: null,
-      current_stock: 0
+      current_stock: 0,
+      unit: ''
     });
     setBillPreview(newItems);
+  };
+
+  const getUnit = (item) => {
+    if (item.unit) return item.unit;
+    const stock = stockList.find(s => s.master_inventory?.item_name === item.item_name);
+    return stock?.master_inventory?.unit || '-';
   };
 
   const calculateSubTotal = () => {
@@ -335,6 +375,7 @@ export default function VoiceBilling() {
         quantity_billed: parseFloat(item.quantity_billed) || 0,
         price_per_unit: parseFloat(item.price_per_unit) || 0,
         item_total: parseFloat(item.item_total) || 0,
+        unit: item.unit || getUnit(item),
         error: !!item.error
       }));
 
@@ -542,23 +583,40 @@ export default function VoiceBilling() {
                   <thead>
                     <tr>
                       <th className="item-col">आइटम</th>
-                      <th>दर</th>
+                      <th>दर (₹)</th>
                       <th>मात्रा</th>
-                      <th>कुल</th>
+                      <th>इकाई</th>
+                      <th>कुल (₹)</th>
                     </tr>
                   </thead>
                   <tbody>
                     {billPreview.map((res, i) => (
                       <tr key={i} style={{ backgroundColor: res.error ? '#fef2f2' : 'transparent' }}>
                         <td className="item-col">
-                          <input
-                            type="text"
-                            list={`stock-options-${i}`}
-                            value={res.item_name || ''}
-                            onChange={(e) => handleItemSelect(i, e.target.value)}
-                            style={{ width: '100%', minWidth: '90px', border: 'none', background: 'transparent', fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.85rem', fontFamily: 'inherit' }}
-                            placeholder="आइटम का नाम"
-                          />
+                          {editingItemIndex === i ? (
+                            <input
+                              autoFocus
+                              type="text"
+                              list={`stock-options-${i}`}
+                              value={res.item_name || ''}
+                              onChange={(e) => handleItemSelect(i, e.target.value)}
+                              onBlur={() => setEditingItemIndex(null)}
+                              style={{ display: 'block', width: '100%', border: '1.5px solid var(--primary)', borderRadius: '6px', background: 'white', fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.83rem', fontFamily: 'inherit', padding: '3px 6px' }}
+                              placeholder="आइटम का नाम"
+                            />
+                          ) : (
+                            <div
+                              onClick={() => setEditingItemIndex(i)}
+                              style={{ fontWeight: 700, color: res.item_name ? 'var(--text-primary)' : 'var(--text-muted)', fontSize: '0.83rem', wordBreak: 'break-word', lineHeight: 1.35, cursor: 'text' }}
+                            >
+                              {res.item_name || 'आइटम का नाम'}
+                            </div>
+                          )}
+                          {res.item_name && (
+                            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 500, marginTop: '2px' }}>
+                              ₹/{getUnit(res) !== '-' ? getUnit(res) : 'unit'}
+                            </div>
+                          )}
                           <datalist id={`stock-options-${i}`}>
                             {stockList.map(stock => (
                               <option key={stock.id} value={stock.master_inventory?.item_name} />
@@ -575,6 +633,11 @@ export default function VoiceBilling() {
                           <div style={{ display: 'flex', justifyContent: 'center' }}>
                             <Stepper value={res.quantity_billed || 0} onChange={(val) => handlePreviewEdit(i, 'quantity_billed', val)} />
                           </div>
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', background: 'var(--surface-2)', padding: '2px 6px', borderRadius: '6px', display: 'inline-block' }}>
+                            {getUnit(res)}
+                          </span>
                         </td>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: '6px' }}>
@@ -828,6 +891,8 @@ export default function VoiceBilling() {
             <thead>
               <tr style={{ borderBottom: '1px solid #ccc' }}>
                 <th style={{ textAlign: 'left', padding: '5px 0' }}>आइटम</th>
+                <th style={{ textAlign: 'center', padding: '5px 0' }}>इकाई</th>
+                <th style={{ textAlign: 'center', padding: '5px 0' }}>दर</th>
                 <th style={{ textAlign: 'center', padding: '5px 0' }}>मात्रा</th>
                 <th style={{ textAlign: 'right', padding: '5px 0' }}>कुल</th>
               </tr>
@@ -836,6 +901,8 @@ export default function VoiceBilling() {
               {billDetails.results.map((item, idx) => (
                 <tr key={idx} style={{ borderBottom: '1px dotted #eee' }}>
                   <td style={{ padding: '5px 0' }}>{item.item_name}</td>
+                  <td style={{ padding: '5px 0', textAlign: 'center' }}>{item.unit || '-'}</td>
+                  <td style={{ padding: '5px 0', textAlign: 'center' }}>₹{item.price_per_unit}</td>
                   <td style={{ padding: '5px 0', textAlign: 'center' }}>{item.quantity_billed}</td>
                   <td style={{ padding: '5px 0', textAlign: 'right', fontWeight: 'bold' }}>₹{item.item_total}</td>
                 </tr>
